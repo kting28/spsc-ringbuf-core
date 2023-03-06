@@ -16,7 +16,7 @@ impl<'a, T, const N: usize> Producer<'a, T, N> {
     }
 
 
-    pub fn commit(&self) -> Result<(), ErrCode> { 
+    pub fn commit(&mut self) -> Result<(), ErrCode> { 
         self.ringbuf_ref.commit()
     }
 }
