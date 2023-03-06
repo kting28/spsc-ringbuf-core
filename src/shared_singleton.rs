@@ -105,3 +105,46 @@ impl <T> SharedSingleton<T> {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    pub struct SomeStruct {
+        id: u32,
+    }
+
+    #[test]
+    fn ownership_changes() {
+
+        let shared = SharedSingleton::<SomeStruct>::new();
+
+        assert!(shared.is_producer_owned());
+
+        if let Some(payload) = shared.get_mut_ref() {
+
+            payload.id = 42;
+            assert!(shared.pass_to_consumer().is_ok());
+        }
+
+        assert!(!shared.is_producer_owned());
+        
+        // once passed to consumer, can't get mut_ref
+        assert!(shared.get_mut_ref().is_none());
+
+        assert!(shared.is_consumer_owned());
+
+        assert!(shared.get_ref().is_some());
+
+        assert!(shared.get_ref().unwrap().id == 42);
+
+        assert!(shared.return_to_producer().is_ok());
+
+    }
+
+
+
+
+
+}

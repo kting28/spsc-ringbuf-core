@@ -1,28 +1,25 @@
-
 //! Fixed capacity Single Producer Single Consumer Ringbuffer with no mutex protection.
 //! Implementation based on https://www.snellman.net/blog/archive/2016-12-13-ring-buffers/
 
-use core::{cell::Cell, cell::UnsafeCell};
 use core::mem::MaybeUninit;
+use core::{cell::Cell, cell::UnsafeCell};
 
 /// Internal Index struct emcapsulating masking and wrapping operations
 /// according to size const size N
 #[derive(Eq, PartialEq)]
 pub struct Index<const N: usize> {
-    cell: Cell<usize>
+    cell: Cell<usize>,
 }
 
 #[derive(Debug)]
 pub enum ErrCode {
     BuffFull,
-    BuffEmpty
+    BuffEmpty,
 }
 
-impl <const N: usize> Index<N> {
-
+impl<const N: usize> Index<N> {
     #[inline]
     pub fn wrap_inc(&self) {
-
         // Wrapping increment by 1 first
         let val = self.cell.get().wrapping_add(1);
 
@@ -30,28 +27,26 @@ impl <const N: usize> Index<N> {
         // For power 2 of values, the natural overflow wrap
         // matches the wraparound of N. Hence the manual wrap
         // below is not required for power of 2 N
-        if !N.is_power_of_two() && val > 2*N-1 {
+        if !N.is_power_of_two() && val > 2 * N - 1 {
             // val = val - 2*N
-            self.cell.set(val.wrapping_sub(2*N));
-        }
-        else {
+            self.cell.set(val.wrapping_sub(2 * N));
+        } else {
             self.cell.set(val);
         }
     }
     #[inline]
-    pub fn wrap_dist(&self, val: &Index<N> ) -> usize {
+    pub fn wrap_dist(&self, val: &Index<N>) -> usize {
         // If N is power of two, just return wrapp_sub(val)
-        // If N is not power of two, wrap value between [0, 2*N-1] 
+        // If N is not power of two, wrap value between [0, 2*N-1]
         // Assumes current value is in the range of [-2*N, 4*N-1]
-        // Not asserting here since we only take Index, which cannot be 
+        // Not asserting here since we only take Index, which cannot be
         // incremented beyong 2*N-1
         let raw = self.cell.get().wrapping_sub(val.get());
         if !N.is_power_of_two() {
             if (raw as i32) < 0 {
-                return raw.wrapping_add(2*N)
-            }
-            else if raw > 2*N - 1 {
-                return raw.wrapping_sub(2*N)
+                return raw.wrapping_add(2 * N);
+            } else if raw > 2 * N - 1 {
+                return raw.wrapping_sub(2 * N);
             }
         }
         raw
@@ -62,12 +57,10 @@ impl <const N: usize> Index<N> {
     pub fn mask(&self) -> usize {
         let val = self.cell.get();
         if N.is_power_of_two() {
-            val & (N-1)
-        }
-        else if val > N - 1 {
+            val & (N - 1)
+        } else if val > N - 1 {
             val - N
-        } 
-        else {
+        } else {
             val
         }
     }
@@ -77,7 +70,9 @@ impl <const N: usize> Index<N> {
         self.cell.get()
     }
     pub const fn new(val: usize) -> Self {
-        Index { cell: Cell::new(val) }
+        Index {
+            cell: Cell::new(val),
+        }
     }
 }
 
@@ -93,15 +88,14 @@ pub struct RingBufRef<T, const N: usize> {
 }
 // Delcare this is thread safe due to the owner protection
 // sequence (Producer-> consumer , consumer -> owner)
-unsafe impl <T, const N: usize> Sync for RingBufRef <T, N> {}
+unsafe impl<T, const N: usize> Sync for RingBufRef<T, N> {}
 
-impl <T, const N: usize> RingBufRef<T, N> {
-
+impl<T, const N: usize> RingBufRef<T, N> {
     // Need to prevent N = 0 instances since the code would compile but crash
     // on the 2*N-1 usize subtracts
     // https://users.rust-lang.org/t/how-do-i-static-assert-a-property-of-a-generic-u32-parameter/76307/2
     const OK: () = assert!(N > 0, "Ringbuf capacity must be larger than 0!");
-    
+
     const INIT_U: UnsafeCell<MaybeUninit<T>> = UnsafeCell::new(MaybeUninit::uninit());
     pub const INIT_0: RingBufRef<T, N> = Self::new();
 
@@ -111,7 +105,11 @@ impl <T, const N: usize> RingBufRef<T, N> {
         // This dummy statement evaluates the assert to prevent 0 sized RingBufRef
         // from being compiled.
         let _: () = RingBufRef::<T, N>::OK;
-        RingBufRef { rd_idx: Index::new(0), wr_idx: Index::new(0), buffer_ucell: [Self::INIT_U; N] }
+        RingBufRef {
+            rd_idx: Index::new(0),
+            wr_idx: Index::new(0),
+            buffer_ucell: [Self::INIT_U; N],
+        }
     }
 
     #[inline]
@@ -148,10 +146,9 @@ impl <T, const N: usize> RingBufRef<T, N> {
             // buffer_ucell contains UnsafeCell<MaybeUninit<T>>
             // UnsafeCell's get is defined as "fn get(&self) -> *mut T"
             let m: *mut MaybeUninit<T> = self.buffer_ucell[self.wr_idx.mask()].get();
-            let t: &mut T = unsafe {  &mut *(m as *mut T)};
+            let t: &mut T = unsafe { &mut *(m as *mut T) };
             Ok(t)
-        }
-        else {
+        } else {
             Err(ErrCode::BuffFull)
         }
     }
@@ -161,8 +158,7 @@ impl <T, const N: usize> RingBufRef<T, N> {
         if !self.is_full() {
             self.wr_idx.wrap_inc();
             Ok(())
-        }
-        else {
+        } else {
             Err(ErrCode::BuffFull)
         }
     }
@@ -175,13 +171,14 @@ impl <T, const N: usize> RingBufRef<T, N> {
         if !self.is_full() {
             // buffer_ucell contains UnsafeCell<MaybeUninit<T>>
             // UnsafeCell's get is defined as "fn get(&self) -> *mut T"
-            // * (* mut T) deference allows the MaybeUninit.write() to be called to 
+            // * (* mut T) deference allows the MaybeUninit.write() to be called to
             // Set the value
-            unsafe {(*self.buffer_ucell[self.wr_idx.mask()].get()).write(val);}
+            unsafe {
+                (*self.buffer_ucell[self.wr_idx.mask()].get()).write(val);
+            }
             self.wr_idx.wrap_inc();
             Ok(())
-        }
-        else {
+        } else {
             Err(ErrCode::BuffFull)
         }
     }
@@ -190,10 +187,9 @@ impl <T, const N: usize> RingBufRef<T, N> {
     pub fn peek(&self) -> Option<&T> {
         if self.is_empty() {
             None
-        }
-        else {
+        } else {
             let x: *mut MaybeUninit<T> = self.buffer_ucell[self.rd_idx.mask()].get();
-            let t: &T = unsafe {  & *(x as *const T)};
+            let t: &T = unsafe { &*(x as *const T) };
             Some(t)
         }
     }
@@ -202,10 +198,9 @@ impl <T, const N: usize> RingBufRef<T, N> {
     pub fn peek_mut(&self) -> Option<&mut T> {
         if self.is_empty() {
             None
-        }
-        else {
+        } else {
             let x: *mut MaybeUninit<T> = self.buffer_ucell[self.rd_idx.mask()].get();
-            let t: &mut T = unsafe {  &mut *(x as *mut T)};
+            let t: &mut T = unsafe { &mut *(x as *mut T) };
             Some(t)
         }
     }
@@ -216,23 +211,44 @@ impl <T, const N: usize> RingBufRef<T, N> {
         if !self.is_empty() {
             self.rd_idx.wrap_inc();
             Ok(())
-        }
-        else {
+        } else {
             Err(ErrCode::BuffEmpty)
         }
-        
     }
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_operations<const N: usize> () {
+    // Test for static allocation
+    // A 4-deep ring buffer
+    const CMD_Q_DEPTH: usize = 4;
+    pub struct SomeStruct {
+        id: u32,
+    }
+    pub struct Interface {
+        cmd_q: RingBufRef<SomeStruct, CMD_Q_DEPTH>,
+    }
+
+    // Set up 2 entries of interfaces
+    const NUM_INTFS: usize = 2;
+    // Init value, suppress the clippy warning for declaring const interior mutable "A “non-constant”
+    // const item is a legacy way to supply an initialized value to downstream"
+    #[allow(clippy::declare_interior_mutable_const)]
+    const INTF_INIT: Interface = Interface {
+        cmd_q: RingBufRef::INIT_0,
+    };
+
+    // Final instantiation as global
+    static SHARED_INTF: [Interface; NUM_INTFS] = [INTF_INIT; NUM_INTFS];
+
+    fn test_operations<const N: usize>() {
         let rbufr1: RingBufRef<u32, N> = RingBufRef::new();
 
-        for i in 0..2*N-1 {
+        // test wraparound and leave read/write around
+        // half the buffer
+        for i in 0..(2 * N - 1 + N / 2) {
             let loc = rbufr1.alloc();
 
             if let Ok(v) = loc {
@@ -254,6 +270,26 @@ mod tests {
         // should fail
         assert!(rbufr1.alloc().is_err());
         assert!(rbufr1.commit().is_err());
+
+        //println!("wr {} rd {}, len {}",
+        //    rbufr1.wr_idx.cell.get(),
+        //    rbufr1.rd_idx.cell.get(),
+        //    rbufr1.len());
+
+        // pop half
+        for _ in 0..N / 2 {
+            assert!(rbufr1.pop().is_ok());
+        }
+        //println!("wr {} rd {}, len {}",
+        //    rbufr1.wr_idx.cell.get(),
+        //    rbufr1.rd_idx.cell.get(),
+        //    rbufr1.len());
+
+        // alloc half
+        for _ in 0..N / 2 {
+            assert!(rbufr1.alloc().is_ok());
+            assert!(rbufr1.commit().is_ok());
+        }
     }
 
     #[test]
@@ -272,10 +308,25 @@ mod tests {
     fn non_power_of_two_len() {
         test_operations::<15>();
     }
+    #[test]
+    fn static_instance_example() {
+        let intf: &'static Interface = &SHARED_INTF[0];
+
+        let alloc_res = intf.cmd_q.alloc();
+
+        if let Ok(cmd) = alloc_res {
+            cmd.id = 42;
+
+            assert!(intf.cmd_q.commit().is_ok());
+        }
+
+        let cmd = intf.cmd_q.peek();
+
+        assert!(cmd.is_some());
+        assert!(cmd.unwrap().id == 42);
+    }
     //#[test]
     //fn zero_len() {
     //    test_operations::<0>();
     //}
-
-
 }
