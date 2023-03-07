@@ -4,7 +4,7 @@ use core::cell::Cell;
 
 pub struct Producer <'a,T, const N: usize> {
 
-    ringbuf_ref: &'a RingBufRef<T, N>
+    inner: &'a RingBufRef<T, N>
 
 }
 
@@ -12,37 +12,37 @@ impl<'a, T, const N: usize> Producer<'a, T, N> {
 
     
     pub fn alloc(&mut self) -> Result<&mut T, ErrCode> { 
-        self.ringbuf_ref.alloc()
+        self.inner.alloc()
     }
 
 
     pub fn commit(&mut self) -> Result<(), ErrCode> { 
-        self.ringbuf_ref.commit()
+        self.inner.commit()
     }
 }
 
 pub struct Consumer <'a,T, const N: usize> {
 
-    ringbuf_ref: &'a RingBufRef<T, N>
+    inner: &'a RingBufRef<T, N>
 
 }
 
 impl<'a, T, const N: usize> Consumer<'a, T, N> {
 
     pub fn peek(&self) -> Option<&T> {
-        self.ringbuf_ref.peek()
+        self.inner.peek()
 
     }
     
     pub fn peek_mut(&mut self) -> Option<&mut T> {
 
-        self.ringbuf_ref.peek_mut()
+        self.inner.peek_mut()
 
     }
 
 
     pub fn pop(&mut self) -> Result<(), ErrCode> {
-        self.ringbuf_ref.pop()
+        self.inner.pop()
     }
 }
 
@@ -69,8 +69,8 @@ impl<T, const N: usize> RingBuf<T, N> {
             Err(())
         }
         else {
-            let producer = Producer {ringbuf_ref: &self.ringbuf_ref};
-            let consumer = Consumer {ringbuf_ref: &self.ringbuf_ref};
+            let producer = Producer {inner: &self.ringbuf_ref};
+            let consumer = Consumer {inner: &self.ringbuf_ref};
             self.has_split.set(true);
             Ok((producer, consumer))
         }
