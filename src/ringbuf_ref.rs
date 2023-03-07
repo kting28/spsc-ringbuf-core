@@ -5,10 +5,11 @@ use core::mem::MaybeUninit;
 use core::{cell::Cell, cell::UnsafeCell};
 
 /// Internal Index struct emcapsulating masking and wrapping operations
-/// according to size const size N
+/// according to size const size N. Note that we deliberately use u32
+/// to limit the index to 4 bytes and max supported capacity to 2^31-1
 #[derive(Eq, PartialEq)]
-pub struct Index<const N: usize> {
-    cell: Cell<usize>,
+pub struct Index<const RANGE: usize> {
+    cell: Cell<u32>,
 }
 
 #[derive(Debug)]
@@ -18,8 +19,13 @@ pub enum ErrCode {
 }
 
 impl<const N: usize> Index<N> {
+
+    const OK: () = assert!(N < (u32::MAX/2) as usize, "Ringbuf capacity must be < u32::MAX/2");
+
     #[inline]
     pub fn wrap_inc(&self) {
+
+        let n = N as u32;
         // Wrapping increment by 1 first
         let val = self.cell.get().wrapping_add(1);
 
@@ -27,26 +33,28 @@ impl<const N: usize> Index<N> {
         // For power 2 of values, the natural overflow wrap
         // matches the wraparound of N. Hence the manual wrap
         // below is not required for power of 2 N
-        if !N.is_power_of_two() && val > 2 * N - 1 {
+        if !n.is_power_of_two() && val > 2 * n - 1 {
             // val = val - 2*N
-            self.cell.set(val.wrapping_sub(2 * N));
+            self.cell.set(val.wrapping_sub(2 * n));
         } else {
             self.cell.set(val);
         }
     }
     #[inline]
-    pub fn wrap_dist(&self, val: &Index<N>) -> usize {
+    pub fn wrap_dist(&self, val: &Index<N>) -> u32 {
+        
+        let n = N as u32;
         // If N is power of two, just return wrapp_sub(val)
         // If N is not power of two, wrap value between [0, 2*N-1]
         // Assumes current value is in the range of [-2*N, 4*N-1]
         // Not asserting here since we only take Index, which cannot be
         // incremented beyong 2*N-1
         let raw = self.cell.get().wrapping_sub(val.get());
-        if !N.is_power_of_two() {
+        if !n.is_power_of_two() {
             if (raw as i32) < 0 {
-                return raw.wrapping_add(2 * N);
-            } else if raw > 2 * N - 1 {
-                return raw.wrapping_sub(2 * N);
+                return raw.wrapping_add(2 * n);
+            } else if raw > 2 * n - 1 {
+                return raw.wrapping_sub(2 * n);
             }
         }
         raw
@@ -54,22 +62,27 @@ impl<const N: usize> Index<N> {
 
     // Mask the value for indexing [0, N-1]
     #[inline]
-    pub fn mask(&self) -> usize {
+    pub fn mask(&self) -> u32 {
+        let n = N as u32;
         let val = self.cell.get();
-        if N.is_power_of_two() {
-            val & (N - 1)
-        } else if val > N - 1 {
-            val - N
+        if n.is_power_of_two() {
+            val & (n - 1)
+        } else if val > n - 1 {
+            val - n
         } else {
             val
         }
     }
 
     #[inline]
-    pub fn get(&self) -> usize {
+    pub fn get(&self) -> u32 {
         self.cell.get()
     }
-    pub const fn new(val: usize) -> Self {
+    
+    #[allow(clippy::let_unit_value)]
+    #[inline]
+    pub const fn new(val: u32) -> Self {
+        let _: () = Index::<N>::OK;
         Index {
             cell: Cell::new(val),
         }
@@ -118,14 +131,14 @@ impl<T, const N: usize> RingBufRef<T, N> {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub fn len(&self) -> u32 {
         // returns the number of elements between read and write pointer
         // use wrapping sub
         self.wr_idx.wrap_dist(&self.rd_idx)
     }
     #[inline]
     pub fn is_full(&self) -> bool {
-        self.len() == N
+        self.len() as usize == N
     }
 
     #[inline]
@@ -145,7 +158,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
         if !self.is_full() {
             // buffer_ucell contains UnsafeCell<MaybeUninit<T>>
             // UnsafeCell's get is defined as "fn get(&self) -> *mut T"
-            let m: *mut MaybeUninit<T> = self.buffer_ucell[self.wr_idx.mask()].get();
+            let m: *mut MaybeUninit<T> = self.buffer_ucell[self.wr_idx.mask() as usize].get();
             let t: &mut T = unsafe { &mut *(m as *mut T) };
             Ok(t)
         } else {
@@ -174,7 +187,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
             // * (* mut T) deference allows the MaybeUninit.write() to be called to
             // Set the value
             unsafe {
-                (*self.buffer_ucell[self.wr_idx.mask()].get()).write(val);
+                (*self.buffer_ucell[self.wr_idx.mask() as usize].get()).write(val);
             }
             self.wr_idx.wrap_inc();
             Ok(())
@@ -188,7 +201,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
         if self.is_empty() {
             None
         } else {
-            let x: *mut MaybeUninit<T> = self.buffer_ucell[self.rd_idx.mask()].get();
+            let x: *mut MaybeUninit<T> = self.buffer_ucell[self.rd_idx.mask() as usize].get();
             let t: &T = unsafe { &*(x as *const T) };
             Some(t)
         }
@@ -199,7 +212,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
         if self.is_empty() {
             None
         } else {
-            let x: *mut MaybeUninit<T> = self.buffer_ucell[self.rd_idx.mask()].get();
+            let x: *mut MaybeUninit<T> = self.buffer_ucell[self.rd_idx.mask() as usize].get();
             let t: &mut T = unsafe { &mut *(x as *mut T) };
             Some(t)
         }
@@ -221,6 +234,16 @@ impl<T, const N: usize> RingBufRef<T, N> {
 mod tests {
     use super::*;
 
+    impl<T, const N: usize> RingBufRef<T, N> {
+        
+        // Test only method for testing wraparound
+        // at extremes
+        pub fn test_init_wr_rd(&self, val: u32) {
+            self.wr_idx.cell.set(val);
+            self.rd_idx.cell.set(val);
+        }
+    }
+ 
     // Test for static allocation
     // A 4-deep ring buffer
     const CMD_Q_DEPTH: usize = 4;
@@ -243,12 +266,9 @@ mod tests {
     // Final instantiation as global
     static SHARED_INTF: [Interface; NUM_INTFS] = [INTF_INIT; NUM_INTFS];
 
-    fn test_operations<const N: usize>() {
-        let rbufr1: RingBufRef<u32, N> = RingBufRef::new();
+    fn test_operations<const N: usize>(rbufr1: RingBufRef<u32, N>, iter: usize) {
 
-        // test wraparound and leave read/write around
-        // half the buffer
-        for i in 0..(2 * N - 1 + N / 2) {
+        for i in 0..iter {
             let loc = rbufr1.alloc();
 
             if let Ok(v) = loc {
@@ -293,20 +313,46 @@ mod tests {
     }
 
     #[test]
+    fn validate_size() {
+        // 4 bytes of wr_idx, 4 bytes of rd_idx, 16*4 for buffer
+        assert!(core::mem::size_of::<RingBufRef<u32, 16>>() == (4 + 4 + 16*4));
+
+        // 4 bytes of wr_idx, 4 bytes of rd_idx, 16*2 for buffer
+        assert!(core::mem::size_of::<RingBufRef<u16, 16>>() == (4 + 4 + 16*2));
+
+        // 4 bytes of wr_idx, 4 bytes of rd_idx, 32*1 for buffer
+        assert!(core::mem::size_of::<RingBufRef<u8, 32>>() == (4 + 4 + 32));
+    }
+
+    #[test]
     fn power_of_two_len() {
-        test_operations::<16>();
+        let rbufr1: RingBufRef<u32, 16> = RingBufRef::new();
+        test_operations::<16>(rbufr1, 2 * 16 - 1 + 16 / 2);
     }
     #[test]
     fn ping_pong() {
-        test_operations::<2>();
+        let rbufr1: RingBufRef<u32, 2> = RingBufRef::new();
+        test_operations::<2>(rbufr1, 2 * 2 - 1 + 2 / 2);
     }
     #[test]
     fn single() {
-        test_operations::<1>();
+        let rbufr1: RingBufRef<u32, 1> = RingBufRef::new();
+        test_operations::<1>(rbufr1, 7);
     }
     #[test]
     fn non_power_of_two_len() {
-        test_operations::<15>();
+        let rbufr1: RingBufRef<u32, 15> = RingBufRef::new();
+        test_operations::<15>(rbufr1, 2 * 15 - 1 + 15 / 2);
+    }
+    #[test]
+    fn power_of_two_len_wrap() {
+        // Test wr and rd near wraparound of u32
+        let rbufr1: RingBufRef<u32, {(u16::MAX) as usize + 1}> = RingBufRef::new();
+        // Caution - direct initialization must guarantee the value is valid
+        // i.e. any value if N is power of 2; 
+        // otherwise must be [0, 2*N-1]
+        rbufr1.test_init_wr_rd(u32::MAX-2);
+        test_operations::<{(u16::MAX) as usize + 1}>(rbufr1, 32768);
     }
     #[test]
     fn static_instance_example() {
