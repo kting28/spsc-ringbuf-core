@@ -11,7 +11,7 @@ pub struct Producer <'a,T, const N: usize> {
 impl<'a, T, const N: usize> Producer<'a, T, N> {
 
     
-    pub fn alloc(&mut self) -> Result<&mut T, ErrCode> { 
+    pub fn alloc(&mut self) -> Option<&mut T> { 
         self.inner.alloc()
     }
 
@@ -91,7 +91,7 @@ mod tests {
             
             let loc = producer.alloc();
 
-            if let Ok(v) = loc {
+            if let Some(v) = loc {
                 *v = 42;
 
                 assert!(producer.commit().is_ok());

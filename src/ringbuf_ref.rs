@@ -154,15 +154,15 @@ impl<T, const N: usize> RingBufRef<T, N> {
     /// location written! We could add some protection by remembering this
     /// during alloc but this will incur runtime cost
     #[inline]
-    pub fn alloc(&self) -> Result<&mut T, ErrCode> {
+    pub fn alloc(&self) -> Option<&mut T> {
         if !self.is_full() {
             // buffer_ucell contains UnsafeCell<MaybeUninit<T>>
             // UnsafeCell's get is defined as "fn get(&self) -> *mut T"
             let m: *mut MaybeUninit<T> = self.buffer_ucell[self.wr_idx.mask() as usize].get();
             let t: &mut T = unsafe { &mut *(m as *mut T) };
-            Ok(t)
+            Some(t)
         } else {
-            Err(ErrCode::BuffFull)
+            None
         }
     }
     /// Commit whatever at the write index location by moving the write index
@@ -271,7 +271,7 @@ mod tests {
         for i in 0..iter {
             let loc = rbufr1.alloc();
 
-            if let Ok(v) = loc {
+            if let Some(v) = loc {
                 *v = i as u32;
             }
             assert!(rbufr1.commit().is_ok());
@@ -284,11 +284,11 @@ mod tests {
         assert!(rbufr1.peek().is_none());
 
         for _ in 0..N {
-            assert!(rbufr1.alloc().is_ok());
+            assert!(rbufr1.alloc().is_some());
             assert!(rbufr1.commit().is_ok());
         }
         // should fail
-        assert!(rbufr1.alloc().is_err());
+        assert!(rbufr1.alloc().is_none());
         assert!(rbufr1.commit().is_err());
 
         //println!("wr {} rd {}, len {}",
@@ -307,7 +307,7 @@ mod tests {
 
         // alloc half
         for _ in 0..N / 2 {
-            assert!(rbufr1.alloc().is_ok());
+            assert!(rbufr1.alloc().is_some());
             assert!(rbufr1.commit().is_ok());
         }
     }
@@ -360,7 +360,7 @@ mod tests {
 
         let alloc_res = intf.cmd_q.alloc();
 
-        if let Ok(cmd) = alloc_res {
+        if let Some(cmd) = alloc_res {
             cmd.id = 42;
 
             assert!(intf.cmd_q.commit().is_ok());

@@ -4,15 +4,15 @@ This is a heapless single producer single consumer (SPSC) queue that depends onl
 
 # Basic ring buffer
 
-The underlying ring buffer utilizes the "Array + two unmasked indices" method illustrated [here](https://www.snellman.net/blog/archive/2016-12-13-ring-buffers/). Essentially this allows usage of all elements allocated in the buffer without resorting to storing length along with read and write indices. When the `const` generic parameter capacity `N` is power of two, the implementation takes advantage of "wraparound on unsigned integer overflow" to allow masking of the read and write indices only on buffer access.
+The underlying ring buffer utilizes the "Array + two unmasked indices" method illustrated [here](https://www.snellman.net/blog/archive/2016-12-13-ring-buffers/). Essentially this allows usage of all elements allocated in the buffer without resorting to storing length along with read and write indices. When the `const` generic parameter capacity `N` is power of two, the implementation takes advantage of "wraparound on unsigned integer overflow" to allow masking of the read and write indices (within `[0, N-1]`) only on buffer access.
 
-If `N` is not a power of two, the implementation wraps the indices between `0` and `2*N-1` as they are incremented in addition to wrapping them to `[0,N-1]` when the buffer is accessed. The maximum supported size of buffer is `2^32 - 1` items. This limit comes from the sized of the read and write indices (`u32`). This can be relaxed if needed by changing the index to `usize` type.
+If `N` is not a power of two, the implementation wraps the indices between `0` and `2*N-1` as they are incremented. The maximum supported size of buffer is `2^32 - 1` items. This limit comes from the size of the read and write indices (`u32`). This can be relaxed if needed by changing the index to `usize` type.
 
-The queue item is generic with no special trait bounds.
+The queue item is generic with no trait bounds.
 
 ## Usage model
 
-The producer calls `alloc()` to claim the current location under `buffer[mask(wr_idx)]`. This returns a mutable reference to the underlying item. After the location is populated, the producer calls `commit()` to advance the write index. The consumer can use `peek ()` to check (and read) new items available. Use `pop()` to consume the item.
+The producer calls `alloc()` to claim the current location under `buffer[mask(wr_idx)]`. This returns a mutable reference to the underlying item. After the location is populated, the producer calls `commit()` to advance the write index. The consumer can use `peek()` to check (and read) new items available. Use `pop()` to consume the item.
 
 # Working around limitations of static global
 

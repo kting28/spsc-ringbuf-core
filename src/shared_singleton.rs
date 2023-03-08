@@ -11,8 +11,9 @@ pub enum ErrCode {
 
 #[derive(Copy, Clone, PartialEq)]
 enum Owner {
-    Producer,
-    Consumer,
+    Unclaimed, // can be claimed for write
+    Producer,  // claimed state
+    Consumer,  // write done, passed to consumer
 }
 
 /// Single producer Single consumer Shared Singleton
@@ -21,7 +22,9 @@ enum Owner {
 /// 
 /// The inner UnsafeCell can be replaced by RefCell<T> is a much more sophisticated 
 /// implementation with checks for multiple borrows. 
-/// Here this version removes the safeguards assuming users handle the rest.
+/// Here this version removes the safeguards assuming users handle the rest. The only protection
+/// is the tristate owner flag which does not allow allocating for write more than once before
+/// commit
 pub struct SharedSingleton <T> {
     // TODO: enforce the owner field to entire word
     owner: Cell<Owner>,
@@ -39,26 +42,17 @@ impl <T> SharedSingleton<T> {
 
     #[inline]
     pub const fn new() -> Self {
-        SharedSingleton { owner: Cell::new(Owner::Producer), ucell: Self::INIT_U  }
+        SharedSingleton { owner: Cell::new(Owner::Unclaimed), ucell: Self::INIT_U  }
     }
-
-    #[inline]
-    pub fn is_producer_owned(&self) -> bool {
-        self.owner.get() == Owner::Producer
-    }
-    #[inline]
-    pub fn is_consumer_owned(&self) -> bool {
-        self.owner.get() == Owner::Consumer
-    }
-
 
     /// Returns mutable reference of T if singleton is owned by the producer
     /// NOTE: does not check for multiple mutable calls!
     #[inline]
-    pub fn get_mut_ref(&self) -> Option<&mut T> {
-        if self.is_producer_owned() {
+    pub fn alloc(&self) -> Option<&mut T> {
+        if self.owner.get() == Owner::Unclaimed {
             let x: *mut MaybeUninit<T> = self.ucell.get();
             let t: &mut T = unsafe {  &mut *(x as *mut T)};
+            self.owner.set(Owner::Producer);
             Some(t)
         }
         else {
@@ -68,8 +62,8 @@ impl <T> SharedSingleton<T> {
 
     /// Pass ownership to Consumer from Producer
     #[inline]
-    pub fn pass_to_consumer(&self) -> Result<(),ErrCode> {
-        if self.is_producer_owned() {
+    pub fn commit(&self) -> Result<(),ErrCode> {
+        if self.owner.get() == Owner::Producer {
             self.owner.set(Owner::Consumer);
             Ok(())
         }
@@ -82,8 +76,8 @@ impl <T> SharedSingleton<T> {
     /// otherwise None
     /// NOTE: does not check for multiple calls
     #[inline]
-    pub fn get_ref(&self) -> Option<&T> {
-        if self.is_consumer_owned() {
+    pub fn peek(&self) -> Option<&T> {
+        if self.owner.get() == Owner::Consumer {
             let x: *mut MaybeUninit<T> = self.ucell.get();
             let t: & T = unsafe {  & *(x as * const T)};
             Some(t)
@@ -95,9 +89,9 @@ impl <T> SharedSingleton<T> {
 
     /// Release location back to Producer
     #[inline]
-    pub fn return_to_producer(&self) -> Result<(),ErrCode> {
-        if self.is_consumer_owned() {
-            self.owner.set(Owner::Producer);
+    pub fn pop(&self) -> Result<(),ErrCode> {
+        if self.owner.get() == Owner::Consumer {
+            self.owner.set(Owner::Unclaimed);
             Ok(())
         }
         else {
@@ -120,31 +114,24 @@ mod tests {
 
         let shared = SharedSingleton::<SomeStruct>::new();
 
-        assert!(shared.is_producer_owned());
+        if let Some(payload) = shared.alloc() {
 
-        if let Some(payload) = shared.get_mut_ref() {
+            // Can only allocate once before commit
+            assert!(shared.alloc().is_none());
 
             payload.id = 42;
-            assert!(shared.pass_to_consumer().is_ok());
+            assert!(shared.commit().is_ok());
         }
 
-        assert!(!shared.is_producer_owned());
-        
         // once passed to consumer, can't get mut_ref
-        assert!(shared.get_mut_ref().is_none());
+        assert!(shared.alloc().is_none());
 
-        assert!(shared.is_consumer_owned());
+        assert!(shared.peek().is_some());
 
-        assert!(shared.get_ref().is_some());
+        assert!(shared.peek().unwrap().id == 42);
 
-        assert!(shared.get_ref().unwrap().id == 42);
-
-        assert!(shared.return_to_producer().is_ok());
+        assert!(shared.pop().is_ok());
 
     }
-
-
-
-
 
 }
