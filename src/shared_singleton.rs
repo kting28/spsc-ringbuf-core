@@ -45,6 +45,11 @@ impl <T> SharedSingleton<T> {
         SharedSingleton { owner: Cell::new(Owner::Unclaimed), ucell: Self::INIT_U  }
     }
 
+    #[inline]
+    pub fn is_vacant(&self) -> bool {
+        self.owner.get() == Owner::Unclaimed
+    }
+
     /// Returns mutable reference of T if singleton is owned by the producer
     /// NOTE: does not check for multiple mutable calls!
     #[inline]

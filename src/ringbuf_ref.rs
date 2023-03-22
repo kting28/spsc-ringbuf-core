@@ -14,8 +14,8 @@ pub struct Index<const RANGE: usize> {
 
 #[derive(Debug)]
 pub enum ErrCode {
-    BuffFull,
-    BuffEmpty,
+    BufFull,
+    BufEmpty,
 }
 
 impl<const N: usize> Index<N> {
@@ -172,7 +172,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
             self.wr_idx.wrap_inc();
             Ok(())
         } else {
-            Err(ErrCode::BuffFull)
+            Err(ErrCode::BufFull)
         }
     }
 
@@ -192,7 +192,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
             self.wr_idx.wrap_inc();
             Ok(())
         } else {
-            Err(ErrCode::BuffFull)
+            Err(ErrCode::BufFull)
         }
     }
     /// Returns an Option of reference to location at read index
@@ -225,7 +225,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
             self.rd_idx.wrap_inc();
             Ok(())
         } else {
-            Err(ErrCode::BuffEmpty)
+            Err(ErrCode::BufEmpty)
         }
     }
 }
