@@ -56,11 +56,16 @@ pub struct RingBuf<T, const N: usize> {
 
 impl<T, const N: usize> RingBuf<T, N> {
 
+    pub const INIT_0: RingBuf<T, N> = Self::new();
+
     pub const fn new() -> Self {
         RingBuf {
             ringbuf_ref: RingBufRef::new(),
             has_split: Cell::new(false)
         }
+    }
+    pub fn has_split(&self) -> bool {
+        self.has_split.get()
     }
     pub fn split(&self) -> Result<(Producer<'_, T, N>, Consumer<'_, T, N>), ()> {
 
