@@ -28,22 +28,21 @@ impl<const N: usize> TryFrom<PoolIndex<N>> for usize {
     }
 }
 
-pub trait HasPayload<const N: usize> {
-    fn payload_idx(&self) -> PoolIndex<N>;
-
-    fn set_payload_idx(&mut self, pindex: PoolIndex<N>);
+pub trait HasPoolIdx<const N: usize> {
+    fn get_pool_idx(&self) -> PoolIndex<N>;
+    fn set_pool_idx(&mut self, pindex: PoolIndex<N>);
 }
 
-pub struct Producer<'a, T, Q: HasPayload<N>, const N: usize> {
+pub struct Producer<'a, T, Q: HasPoolIdx<N>, const N: usize> {
     // Producer handle for the command allocation
-    alloc_prod: RingBufProducer<'a, Q, N>,
+    pub alloc_prod: RingBufProducer<'a, Q, N>,
     // Consumer handle for the return ringbuf
-    return_cons: RingBufConsumer<'a, Q, N>,
+    pub return_cons: RingBufConsumer<'a, Q, N>,
     // Reference to the payload pool
     pool_ref: &'a [SharedSingleton<T>; N],
 }
 
-impl<'a, T, Q: HasPayload<N>, const N: usize> Producer<'a, T, Q, N> {
+impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Producer<'a, T, Q, N> {
     pub const fn new(
         alloc_prod: RingBufProducer<'a, Q, N>,
         return_cons: RingBufConsumer<'a, Q, N>,
@@ -56,13 +55,13 @@ impl<'a, T, Q: HasPayload<N>, const N: usize> Producer<'a, T, Q, N> {
         }
     }
 
-    // Allocate a payload item from the return rbuf
-    pub fn alloc_payload(&mut self) -> PoolIndex<N> {
+    // Internal - get an item from the pool
+    fn get_pool_item(&mut self) -> PoolIndex<N> {
         // Check the return queue
         if let Some(item) = self.return_cons.peek() {
             // If there's a return item it must be a valid
             // pool index
-            let payload_idx = usize::try_from(item.payload_idx()).unwrap();
+            let payload_idx = usize::try_from(item.get_pool_idx()).unwrap();
 
             // Assert location indicated as free is actually vacant
             assert!(self.pool_ref[payload_idx].is_vacant());
@@ -79,7 +78,7 @@ impl<'a, T, Q: HasPayload<N>, const N: usize> Producer<'a, T, Q, N> {
     // Allocate queue without payload
     pub fn alloc(&mut self) -> Option<&mut Q> {
         if let Some(item) = self.alloc_prod.alloc() {
-            item.set_payload_idx(PoolIndex::<N>(N as u32));
+            item.set_pool_idx(PoolIndex::<N>(N as u32));
 
             Some(item)
         } else {
@@ -90,11 +89,11 @@ impl<'a, T, Q: HasPayload<N>, const N: usize> Producer<'a, T, Q, N> {
     // Allocate a command buffer and an accompanying payload from the pool
     // Return a pair of mutable references if successful
     pub fn alloc_with_payload(&mut self) -> Result<(&mut Q, &SharedSingleton<T>), SharedPoolError> {
-        if let Ok(idx) = usize::try_from(self.alloc_payload()) {
+        if let Ok(idx) = usize::try_from(self.get_pool_item()) {
             let payload = &self.pool_ref[idx];
 
             if let Some(item) = self.alloc_prod.alloc() {
-                item.set_payload_idx(PoolIndex::<N>(idx as u32));
+                item.set_pool_idx(PoolIndex::<N>(idx as u32));
 
                 Ok((item, payload))
             } else {
@@ -110,7 +109,7 @@ impl<'a, T, Q: HasPayload<N>, const N: usize> Producer<'a, T, Q, N> {
     pub fn commit(&mut self) -> Result<(), SharedPoolError> {
         // In payload has been allocated, check if passed to consumer.
         if let Some(item) = self.alloc_prod.alloc() {
-            if let Ok(idx) = usize::try_from(item.payload_idx()) {
+            if let Ok(idx) = usize::try_from(item.get_pool_idx()) {
                 if self.pool_ref[idx].peek().is_none() {
                     // Payload index is set but not passed to consumer
                     return Err(SharedPoolError::PayloadNotConsumerOwned);
@@ -125,16 +124,16 @@ impl<'a, T, Q: HasPayload<N>, const N: usize> Producer<'a, T, Q, N> {
     }
 }
 
-pub struct Consumer<'a, T, Q: HasPayload<N>, const N: usize> {
+pub struct Consumer<'a, T, Q: HasPoolIdx<N>, const N: usize> {
     // Consumer handle for the command allocation
-    alloc_cons: RingBufConsumer<'a, Q, N>,
+    pub alloc_cons: RingBufConsumer<'a, Q, N>,
     // Producer handle for the return ringbuf
-    return_prod: RingBufProducer<'a, Q, N>,
+    pub return_prod: RingBufProducer<'a, Q, N>,
     // Reference to the payload pool
     pool_ref: &'a [SharedSingleton<T>; N],
 }
 
-impl<'a, T, Q: HasPayload<N>, const N: usize> Consumer<'a, T, Q, N> {
+impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Consumer<'a, T, Q, N> {
     pub fn peek(&self) -> Option<&Q> {
         self.alloc_cons.peek()
     }
@@ -155,7 +154,7 @@ impl<'a, T, Q: HasPayload<N>, const N: usize> Consumer<'a, T, Q, N> {
 
             assert!(self.pool_ref[loc].is_vacant());
 
-            re.set_payload_idx(pidx);
+            re.set_pool_idx(pidx);
 
             self.return_prod
                 .commit()
@@ -166,15 +165,15 @@ impl<'a, T, Q: HasPayload<N>, const N: usize> Consumer<'a, T, Q, N> {
     }
 }
 
-pub struct SharedPool<T, Q: HasPayload<N>, const N: usize> {
+pub struct SharedPool<T, Q: HasPoolIdx<N>, const N: usize> {
     alloc_rbuf: RingBuf<Q, N>,
     return_rbuf: RingBuf<Q, N>,
     pool: [SharedSingleton<T>; N],
 }
 
-unsafe impl<T, Q: HasPayload<N>, const N: usize> Sync for SharedPool<T, Q, N> {}
+unsafe impl<T, Q: HasPoolIdx<N>, const N: usize> Sync for SharedPool<T, Q, N> {}
 
-impl<T, Q: HasPayload<N>, const N: usize> SharedPool<T, Q, N> {
+impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
     // new
     // initialize return_rbuf to be full
     // return to be empty
@@ -202,7 +201,7 @@ impl<T, Q: HasPayload<N>, const N: usize> SharedPool<T, Q, N> {
             for i in 0..N {
                 // Can unwrap here as we don't expect this fail
                 let item = ret_p.alloc().unwrap();
-                item.set_payload_idx(PoolIndex(i as u32));
+                item.set_pool_idx(PoolIndex(i as u32));
                 ret_p.commit().unwrap();
             }
 
@@ -233,11 +232,11 @@ mod tests {
         payload: PoolIndex<CMD_Q_DEPTH>,
     }
 
-    impl HasPayload<CMD_Q_DEPTH> for Message {
-        fn payload_idx(&self) -> PoolIndex<CMD_Q_DEPTH> {
+    impl HasPoolIdx<CMD_Q_DEPTH> for Message {
+        fn get_pool_idx(&self) -> PoolIndex<CMD_Q_DEPTH> {
             self.payload
         }
-        fn set_payload_idx(&mut self, pindex: PoolIndex<CMD_Q_DEPTH>) {
+        fn set_pool_idx(&mut self, pindex: PoolIndex<CMD_Q_DEPTH>) {
             self.payload = pindex
         }
     }
@@ -257,9 +256,7 @@ mod tests {
         if let Ok((mut producer, mut consumer)) = SHARED_POOL.split() {
 
             // Try to allocate a pool item
-            let payload_idx = producer.alloc_payload();
-
-            println!("payload idx = {}", payload_idx.0);
+            let payload_idx = producer.get_pool_item();
 
             // Assert allocation is successful
             assert!(usize::try_from(payload_idx).is_ok());
@@ -277,7 +274,7 @@ mod tests {
             let message = producer.alloc().unwrap();
 
             // Set the payload index to the message
-            message.set_payload_idx(payload_idx);
+            message.set_pool_idx(payload_idx);
 
             // Commit the command message
             assert!(producer.commit().is_ok());
@@ -287,12 +284,14 @@ mod tests {
 
             let recvd = consumer.alloc_cons.peek().unwrap();
 
-            let ret_pool_idx: usize = recvd.payload_idx().try_into().unwrap();
+            let ret_pool_idx: usize = recvd.get_pool_idx().try_into().unwrap();
 
             // Return the payload item to the pool
             assert!(consumer.pool_ref[ret_pool_idx].pop().is_ok());
 
-            assert!(consumer.enqueue_return(recvd.payload_idx()).is_ok());
+            assert!(consumer.enqueue_return(recvd.get_pool_idx()).is_ok());
+
+
         } else {
             panic!("first split failed!");
         }
