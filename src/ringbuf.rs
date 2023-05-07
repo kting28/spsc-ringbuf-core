@@ -10,12 +10,13 @@ pub struct Producer <'a,T, const N: usize> {
 
 impl<'a, T, const N: usize> Producer<'a, T, N> {
 
-    
-    pub fn alloc(&mut self) -> Option<&mut T> { 
-        self.inner.alloc()
+    #[inline(always)]
+    pub fn stage(&mut self) -> Option<&mut T> { 
+        self.inner.stage()
     }
 
 
+    #[inline(always)]
     pub fn commit(&mut self) -> Result<(), ErrCode> { 
         self.inner.commit()
     }
@@ -29,11 +30,13 @@ pub struct Consumer <'a,T, const N: usize> {
 
 impl<'a, T, const N: usize> Consumer<'a, T, N> {
 
+    #[inline(always)]
     pub fn peek(&self) -> Option<&T> {
         self.inner.peek()
 
     }
     
+    #[inline(always)]
     pub fn peek_mut(&mut self) -> Option<&mut T> {
 
         self.inner.peek_mut()
@@ -41,6 +44,7 @@ impl<'a, T, const N: usize> Consumer<'a, T, N> {
     }
 
 
+    #[inline(always)]
     pub fn pop(&mut self) -> Result<(), ErrCode> {
         self.inner.pop()
     }
@@ -91,10 +95,10 @@ mod tests {
         let ringbuf = RingBuf::<u32, 4>::new();
 
         // The producer and consumer must be mutable to use the mut functions such
-        // as alloc, commit and pop
+        // as stage, commit and pop
         if let Ok((mut producer, mut consumer)) = ringbuf.split() {
             
-            let loc = producer.alloc();
+            let loc = producer.stage();
 
             if let Some(v) = loc {
                 *v = 42;

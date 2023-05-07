@@ -22,7 +22,7 @@ impl<const N: usize> Index<N> {
 
     const OK: () = assert!(N < (u32::MAX/2) as usize, "Ringbuf capacity must be < u32::MAX/2");
 
-    #[inline]
+    #[inline(always)]
     pub fn wrap_inc(&self) {
 
         let n = N as u32;
@@ -40,7 +40,8 @@ impl<const N: usize> Index<N> {
             self.cell.set(val);
         }
     }
-    #[inline]
+    
+    #[inline(always)]
     pub fn wrap_dist(&self, val: &Index<N>) -> u32 {
         
         let n = N as u32;
@@ -61,7 +62,7 @@ impl<const N: usize> Index<N> {
     }
 
     // Mask the value for indexing [0, N-1]
-    #[inline]
+    #[inline(always)]
     pub fn mask(&self) -> u32 {
         let n = N as u32;
         let val = self.cell.get();
@@ -74,13 +75,13 @@ impl<const N: usize> Index<N> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get(&self) -> u32 {
         self.cell.get()
     }
     
     #[allow(clippy::let_unit_value)]
-    #[inline]
+    #[inline(always)]
     pub const fn new(val: u32) -> Self {
         let _: () = Index::<N>::OK;
         Index {
@@ -93,9 +94,9 @@ impl<const N: usize> Index<N> {
 /// Non power-of-two N is supported but less efficient.
 pub struct RingBufRef<T, const N: usize> {
     // this is from where we dequeue items
-    pub rd_idx: Index<N>,
+    rd_idx: Index<N>,
     //  where we enqueue new items
-    pub wr_idx: Index<N>,
+    wr_idx: Index<N>,
     // this is the backend array
     buffer_ucell: [UnsafeCell<MaybeUninit<T>>; N],
 }
@@ -125,36 +126,36 @@ impl<T, const N: usize> RingBufRef<T, N> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.rd_idx == self.wr_idx
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> u32 {
         // returns the number of elements between read and write pointer
         // use wrapping sub
         self.wr_idx.wrap_dist(&self.rd_idx)
     }
-    #[inline]
+    #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.len() as usize == N
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn capacity(&self) -> usize {
         N
     }
 
-    /// Allocate means returning the write index location as mutable reference.
+    /// Stage means returning the write index location as mutable reference.
     /// The Result<> return enforces handling of return type
     /// I.e. if user does not check for push success, the compiler
     /// generates warnings
-    /// Calling alloc twice without commit in between results in the same
+    /// Calling stage twice without commit in between results in the same
     /// location written! We could add some protection by remembering this
     /// during alloc but this will incur runtime cost
-    #[inline]
-    pub fn alloc(&self) -> Option<&mut T> {
+    #[inline(always)]
+    pub fn stage(&self) -> Option<&mut T> {
         if !self.is_full() {
             // buffer_ucell contains UnsafeCell<MaybeUninit<T>>
             // UnsafeCell's get is defined as "fn get(&self) -> *mut T"
@@ -166,7 +167,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
         }
     }
     /// Commit whatever at the write index location by moving the write index
-    #[inline]
+    #[inline(always)]
     pub fn commit(&self) -> Result<(), ErrCode> {
         if !self.is_full() {
             self.wr_idx.wrap_inc();
@@ -179,7 +180,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
     /// Alloc and commit in one step by providing the value T to be written
     /// val's ownership is moved. (Question: it seems if T implements Clone,
     /// compiler copies T)
-    #[inline]
+    #[inline(always)]
     pub fn push(&self, val: T) -> Result<(), ErrCode> {
         if !self.is_full() {
             // buffer_ucell contains UnsafeCell<MaybeUninit<T>>
@@ -196,7 +197,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
         }
     }
     /// Returns an Option of reference to location at read index
-    #[inline]
+    #[inline(always)]
     pub fn peek(&self) -> Option<&T> {
         if self.is_empty() {
             None
@@ -207,7 +208,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
         }
     }
     /// Returns an Option of mutable reference to location at read index
-    #[inline]
+    #[inline(always)]
     pub fn peek_mut(&self) -> Option<&mut T> {
         if self.is_empty() {
             None
@@ -219,7 +220,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
     }
 
     /// Consume the item at rd_idx
-    #[inline]
+    #[inline(always)]
     pub fn pop(&self) -> Result<(), ErrCode> {
         if !self.is_empty() {
             self.rd_idx.wrap_inc();
@@ -269,7 +270,7 @@ mod tests {
     fn test_operations<const N: usize>(rbufr1: RingBufRef<u32, N>, iter: usize) {
 
         for i in 0..iter {
-            let loc = rbufr1.alloc();
+            let loc = rbufr1.stage();
 
             if let Some(v) = loc {
                 *v = i as u32;
@@ -284,11 +285,11 @@ mod tests {
         assert!(rbufr1.peek().is_none());
 
         for _ in 0..N {
-            assert!(rbufr1.alloc().is_some());
+            assert!(rbufr1.stage().is_some());
             assert!(rbufr1.commit().is_ok());
         }
         // should fail
-        assert!(rbufr1.alloc().is_none());
+        assert!(rbufr1.stage().is_none());
         assert!(rbufr1.commit().is_err());
 
         //println!("wr {} rd {}, len {}",
@@ -307,7 +308,7 @@ mod tests {
 
         // alloc half
         for _ in 0..N / 2 {
-            assert!(rbufr1.alloc().is_some());
+            assert!(rbufr1.stage().is_some());
             assert!(rbufr1.commit().is_ok());
         }
     }
@@ -358,7 +359,7 @@ mod tests {
     fn static_instance_example() {
         let intf: &'static Interface = &SHARED_INTF[0];
 
-        let alloc_res = intf.cmd_q.alloc();
+        let alloc_res = intf.cmd_q.stage();
 
         if let Some(cmd) = alloc_res {
             cmd.id = 42;

@@ -1,6 +1,7 @@
 use crate::ringbuf::{Consumer as RingBufConsumer, Producer as RingBufProducer, RingBuf};
 use crate::shared_singleton::SharedSingleton;
 
+#[derive(Debug)]
 pub enum SharedPoolError {
     PoolFull,
     AllocBufFull,
@@ -25,6 +26,12 @@ impl<const N: usize> TryFrom<PoolIndex<N>> for usize {
             // Ok, can be referenced
             Ok(value.0 as usize)
         }
+    }
+}
+
+impl<const N: usize>  PoolIndex<N> {
+    fn is_valid(&self) -> bool {
+        self.0 < N as u32
     }
 }
 
@@ -75,9 +82,9 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Producer<'a, T, Q, N> {
         PoolIndex(N as u32)
     }
 
-    // Allocate queue without payload
-    pub fn alloc(&mut self) -> Option<&mut Q> {
-        if let Some(item) = self.alloc_prod.alloc() {
+    // Stage item for write without payload
+    pub fn stage(&mut self) -> Option<&mut Q> {
+        if let Some(item) = self.alloc_prod.stage() {
             item.set_pool_idx(PoolIndex::<N>(N as u32));
 
             Some(item)
@@ -86,13 +93,13 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Producer<'a, T, Q, N> {
         }
     }
 
-    // Allocate a command buffer and an accompanying payload from the pool
+    // Stage a command buffer and an accompanying payload from the pool
     // Return a pair of mutable references if successful
-    pub fn alloc_with_payload(&mut self) -> Result<(&mut Q, &SharedSingleton<T>), SharedPoolError> {
+    pub fn stage_with_payload(&mut self) -> Result<(&mut Q, &SharedSingleton<T>), SharedPoolError> {
         if let Ok(idx) = usize::try_from(self.get_pool_item()) {
             let payload = &self.pool_ref[idx];
 
-            if let Some(item) = self.alloc_prod.alloc() {
+            if let Some(item) = self.alloc_prod.stage() {
                 item.set_pool_idx(PoolIndex::<N>(idx as u32));
 
                 Ok((item, payload))
@@ -108,7 +115,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Producer<'a, T, Q, N> {
     // if the payload has already been passed to the consumer.
     pub fn commit(&mut self) -> Result<(), SharedPoolError> {
         // In payload has been allocated, check if passed to consumer.
-        if let Some(item) = self.alloc_prod.alloc() {
+        if let Some(item) = self.alloc_prod.stage() {
             if let Ok(idx) = usize::try_from(item.get_pool_idx()) {
                 if self.pool_ref[idx].peek().is_none() {
                     // Payload index is set but not passed to consumer
@@ -147,7 +154,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Consumer<'a, T, Q, N> {
     // Return a payload location in the pool back to the Producer
     pub fn enqueue_return(&mut self, pidx: PoolIndex<N>) -> Result<(), SharedPoolError> {
         // Allocation a location in the return queue
-        if let Some(re) = self.return_prod.alloc() {
+        if let Some(re) = self.return_prod.stage() {
             // Assert returned payload idx is at least valid
             // That's the best we can do from consumer side
             let loc = usize::try_from(pidx).unwrap();
@@ -200,7 +207,7 @@ impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
             // Pre-fill the return queue with all the pool indices
             for i in 0..N {
                 // Can unwrap here as we don't expect this fail
-                let item = ret_p.alloc().unwrap();
+                let item = ret_p.stage().unwrap();
                 item.set_pool_idx(PoolIndex(i as u32));
                 ret_p.commit().unwrap();
             }
@@ -251,48 +258,75 @@ mod tests {
         pool: [SharedSingleton::<Payload>::INIT_0; 16],
     };
 
+    pub struct Handles <'a> {
+        producer_ref: &'a Producer<'a, Payload, Message, 16>,
+        consumer_ref: &'a Producer<'a, Payload, Message, 16>,
+    }
+
     #[test]
-    fn test_sanity() {
+    fn test_static() {
         if let Ok((mut producer, mut consumer)) = SHARED_POOL.split() {
 
-            // Try to allocate a pool item
-            let payload_idx = producer.get_pool_item();
-
-            // Assert allocation is successful
-            assert!(usize::try_from(payload_idx).is_ok());
-
-            let pool_idx: usize = payload_idx.try_into().unwrap();
-
-            //allocate the location for write, this changes the owner
-            //to Producer
-            assert!(producer.pool_ref[pool_idx].alloc().is_some());
-
-            // Commit it
-            assert!(producer.pool_ref[pool_idx].commit().is_ok());
-
             // Allocate the actual command
-            let message = producer.alloc().unwrap();
+            let (message, payload) = producer.stage_with_payload().unwrap();
+            
+            // Update the message
+            message.id = 41;
+            let raw = payload.stage().unwrap();
+            raw.value = 42;
+            // Pass the payload
+            payload.commit().unwrap();
 
-            // Set the payload index to the message
-            message.set_pool_idx(payload_idx);
-
-            // Commit the command message
+            // Commit 
             assert!(producer.commit().is_ok());
 
-            // Test consumer
+            // Test consumer can see it
             assert!(consumer.alloc_cons.peek().is_some());
 
             let recvd = consumer.alloc_cons.peek().unwrap();
 
+            assert!(recvd.id == 41);
+
             let ret_pool_idx: usize = recvd.get_pool_idx().try_into().unwrap();
 
-            // Return the payload item to the pool
+            assert!(consumer.pool_ref[ret_pool_idx].peek().unwrap().value == 42);
+
+            // Return the payload item to producer
             assert!(consumer.pool_ref[ret_pool_idx].pop().is_ok());
 
+            // Return the payload location back to the queue
             assert!(consumer.enqueue_return(recvd.get_pool_idx()).is_ok());
 
-
         } else {
+            panic!("first split failed!");
+        }
+    }
+
+    #[test]
+    fn test_errors() {
+
+        let shared_pool: SharedPool<Payload, Message, 16> = SharedPool {
+            alloc_rbuf: RingBuf::INIT_0,
+            return_rbuf: RingBuf::INIT_0,
+            pool: [SharedSingleton::<Payload>::INIT_0; 16],
+        };
+
+        if let Ok((mut producer, mut consumer)) = shared_pool.split() {
+
+            let message = producer.stage().unwrap();
+
+            message.id = 41;
+            assert!(producer.commit().is_ok());
+
+            let recvd = consumer.alloc_cons.peek().unwrap();
+
+            // There's no payload
+            assert!(!recvd.get_pool_idx().is_valid());
+
+            // Return an invalid location
+            assert!(consumer.enqueue_return(recvd.get_pool_idx()).is_err());
+        }
+        else {
             panic!("first split failed!");
         }
     }

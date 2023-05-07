@@ -53,7 +53,7 @@ impl <T> SharedSingleton<T> {
     /// Returns mutable reference of T if singleton is owned by the producer
     /// NOTE: does not check for multiple mutable calls!
     #[inline]
-    pub fn alloc(&self) -> Option<&mut T> {
+    pub fn stage(&self) -> Option<&mut T> {
         if self.owner.get() == Owner::Unclaimed {
             let x: *mut MaybeUninit<T> = self.ucell.get();
             let t: &mut T = unsafe {  &mut *(x as *mut T)};
@@ -119,17 +119,17 @@ mod tests {
 
         let shared = SharedSingleton::<SomeStruct>::new();
 
-        if let Some(payload) = shared.alloc() {
+        if let Some(payload) = shared.stage() {
 
             // Can only allocate once before commit
-            assert!(shared.alloc().is_none());
+            assert!(shared.stage().is_none());
 
             payload.id = 42;
             assert!(shared.commit().is_ok());
         }
 
         // once passed to consumer, can't get mut_ref
-        assert!(shared.alloc().is_none());
+        assert!(shared.stage().is_none());
 
         assert!(shared.peek().is_some());
 
