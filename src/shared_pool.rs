@@ -193,16 +193,40 @@ impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
         }
     }
 
-    pub fn split(&self) -> Result<(Producer<'_, T, Q, N>, Consumer<'_, T, Q, N>), SharedPoolError> {
-        if self.alloc_rbuf.has_split() || self.return_rbuf.has_split() {
+    // Return the producer, once in life time
+    pub fn split_prod(&self) -> Result<Producer<'_, T, Q, N>, SharedPoolError> {
+        if self.alloc_rbuf.has_split_prod() || self.return_rbuf.has_split_cons() {
             // Can only split once in life time
             Err(SharedPoolError::AlreadySplit)
         } else {
             // Split the allocation and return ring buffers to their
             // corresponding producers and consumers. Not expected to fail
             // since this is already protected by our own has split flag
-            let (alloc_p, alloc_c) = self.alloc_rbuf.split().unwrap();
-            let (mut ret_p, ret_c) = self.return_rbuf.split().unwrap();
+            let alloc_p = self.alloc_rbuf.split_prod().unwrap();
+            let ret_c = self.return_rbuf.split_cons().unwrap();
+
+            // Distribute the producers and consumers to the final
+            // Producer and Consumer wrappers
+            let producer = Producer {
+                alloc_prod: alloc_p,
+                return_cons: ret_c,
+                pool_ref: &self.pool,
+            };
+            Ok(producer)
+        }
+    }
+
+    // Return the consumer, once in life time
+    pub fn split_cons(&self) -> Result<Consumer<'_, T, Q, N>, SharedPoolError> {
+        if self.alloc_rbuf.has_split_cons() || self.return_rbuf.has_split_prod() {
+            // Can only split once in life time
+            Err(SharedPoolError::AlreadySplit)
+        } else {
+            // Split the allocation and return ring buffers to their
+            // corresponding producers and consumers. Not expected to fail
+            // since this is already protected by our own has split flag
+            let alloc_c = self.alloc_rbuf.split_cons().unwrap();
+            let mut ret_p = self.return_rbuf.split_prod().unwrap();
 
             // Pre-fill the return queue with all the pool indices
             for i in 0..N {
@@ -212,21 +236,23 @@ impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
                 ret_p.commit().unwrap();
             }
 
-            // Distribute the producers and consumers to the final
-            // Producer and Consumer wrappers
-            let producer = Producer {
-                alloc_prod: alloc_p,
-                return_cons: ret_c,
-                pool_ref: &self.pool,
-            };
             let consumer = Consumer {
                 alloc_cons: alloc_c,
                 return_prod: ret_p,
                 pool_ref: &self.pool,
             };
-            Ok((producer, consumer))
+            Ok(consumer)
         }
     }
+    // Split both producer and consumer handle together
+    pub fn split(&self) -> Result<(Producer<'_, T, Q, N>, Consumer<'_, T, Q, N>), SharedPoolError> {
+
+        match (self.split_prod(), self.split_cons())  {
+            (Ok(prod), Ok(cons)) => Ok((prod, cons)),
+            _ => Err(SharedPoolError::AlreadySplit)
+        }
+    }
+
 }
 
 #[cfg(test)]
@@ -320,11 +346,54 @@ mod tests {
 
             let recvd = consumer.alloc_cons.peek().unwrap();
 
+
             // There's no payload
             assert!(!recvd.get_pool_idx().is_valid());
+            
 
             // Return an invalid location
             assert!(consumer.enqueue_return(recvd.get_pool_idx()).is_err());
+
+            consumer.pop().unwrap();
+            
+            for i in 0..16 {
+
+                let (_, payload) = producer.stage_with_payload().unwrap();
+                // unclaimed to producer
+                payload.stage().unwrap();
+                payload.commit().unwrap();
+                // producer to consumer
+                producer.commit().unwrap();
+
+            }
+
+            // No way to stage one more as everything has been 
+            // allocated
+            assert!(producer.stage_with_payload().is_err());
+
+            // Return the message but not payload
+            let payload_idx = consumer.alloc_cons.peek().unwrap().get_pool_idx();
+
+            // Set the payload locatio[n as done
+            consumer.pool_ref[usize::try_from(payload_idx).unwrap()].pop().unwrap();
+            consumer.pop().unwrap();
+
+            // should still fail
+            assert!(producer.stage_with_payload().is_err());
+
+            // stage without payload should be fine
+            assert!(producer.stage().is_some());
+
+            // return the payload
+            assert!(consumer.enqueue_return(payload_idx).is_ok());
+
+            let new_stage = producer.stage_with_payload();
+
+            match new_stage {
+                Ok((msg, _)) => assert!(msg.get_pool_idx().is_valid()),
+                _ => panic!("new stage should have valid payload!") 
+            }
+
         }
         else {
             panic!("first split failed!");

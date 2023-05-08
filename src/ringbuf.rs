@@ -54,7 +54,8 @@ impl<'a, T, const N: usize> Consumer<'a, T, N> {
 pub struct RingBuf<T, const N: usize> {
 
     ringbuf_ref: RingBufRef<T, N>,
-    has_split: Cell<bool>
+    has_split_prod: Cell<bool>,
+    has_split_cons: Cell<bool>
 
 }
 
@@ -65,25 +66,53 @@ impl<T, const N: usize> RingBuf<T, N> {
     pub const fn new() -> Self {
         RingBuf {
             ringbuf_ref: RingBufRef::new(),
-            has_split: Cell::new(false)
+            has_split_prod: Cell::new(false),
+            has_split_cons: Cell::new(false)
         }
     }
-    pub fn has_split(&self) -> bool {
-        self.has_split.get()
+    pub fn has_split_prod(&self) -> bool {
+        self.has_split_prod.get()
     }
-    pub fn split(&self) -> Result<(Producer<'_, T, N>, Consumer<'_, T, N>), ()> {
+    pub fn has_split_cons(&self) -> bool {
+        self.has_split_cons.get()
+    }
+    pub fn has_split(&self) -> bool {
+        self.has_split_cons() || self.has_split_prod()
+    }
 
-        if self.has_split.get() {
+    
+    pub fn split_prod(&self) -> Result<Producer<'_, T, N>, ()> {
+
+        if self.has_split_prod.get() {
             // Can only split once in life time
             Err(())
         }
         else {
             let producer = Producer {inner: &self.ringbuf_ref};
-            let consumer = Consumer {inner: &self.ringbuf_ref};
-            self.has_split.set(true);
-            Ok((producer, consumer))
+            self.has_split_prod.set(true);
+            Ok(producer)
         }
     }
+    pub fn split_cons(&self) -> Result<Consumer<'_, T, N>, ()> {
+
+        if self.has_split_cons.get() {
+            // Can only split once in life time
+            Err(())
+        }
+        else {
+            let consumer = Consumer {inner: &self.ringbuf_ref};
+            self.has_split_cons.set(true);
+            Ok(consumer)
+        }
+    }
+    pub fn split(&self) -> Result<(Producer<'_, T, N>, Consumer<'_, T, N>), ()> {
+
+        match (self.split_prod(), self.split_cons())  {
+            (Ok(prod), Ok(cons)) => Ok((prod, cons)),
+            _ => Err(())
+        }
+    }
+
 }
 
 #[cfg(test)]
