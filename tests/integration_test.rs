@@ -99,7 +99,7 @@ fn test_errors() {
     assert!(producer.stage().is_some());
 
     // Return the index
-    assert!(consumer.enqueue_return(pool_idx).is_ok());
+    assert!(consumer.return_payload(pool_idx).is_ok());
 
     // Should be possible to stage with payload
     let new_stage = producer.stage_with_payload();

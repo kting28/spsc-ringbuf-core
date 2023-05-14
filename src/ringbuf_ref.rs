@@ -147,7 +147,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
         N
     }
 
-    /// Stage means returning the write index location as mutable reference.
+    /// Returns the write index location as mutable reference.
     /// The Result<> return enforces handling of return type
     /// I.e. if user does not check for push success, the compiler
     /// generates warnings
@@ -155,7 +155,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
     /// location written! We could add some protection by remembering this
     /// during alloc but this will incur runtime cost
     #[inline(always)]
-    pub fn stage(&self) -> Option<&mut T> {
+    pub fn writer_front(&self) -> Option<&mut T> {
         if !self.is_full() {
             // buffer_ucell contains UnsafeCell<MaybeUninit<T>>
             // UnsafeCell's get is defined as "fn get(&self) -> *mut T"
@@ -198,7 +198,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
     }
     /// Returns an Option of reference to location at read index
     #[inline(always)]
-    pub fn peek(&self) -> Option<&T> {
+    pub fn reader_front(&self) -> Option<&T> {
         if self.is_empty() {
             None
         } else {
@@ -209,7 +209,7 @@ impl<T, const N: usize> RingBufRef<T, N> {
     }
     /// Returns an Option of mutable reference to location at read index
     #[inline(always)]
-    pub fn peek_mut(&self) -> Option<&mut T> {
+    pub fn reader_front_mut(&self) -> Option<&mut T> {
         if self.is_empty() {
             None
         } else {
@@ -270,26 +270,26 @@ mod tests {
     fn test_operations<const N: usize>(rbufr1: RingBufRef<u32, N>, iter: usize) {
 
         for i in 0..iter {
-            let loc = rbufr1.stage();
+            let loc = rbufr1.writer_front();
 
             if let Some(v) = loc {
                 *v = i as u32;
             }
             assert!(rbufr1.commit().is_ok());
-            if let Some(v) = rbufr1.peek() {
+            if let Some(v) = rbufr1.reader_front() {
                 assert!(*v == i as u32);
                 assert!(rbufr1.pop().is_ok());
             }
         }
 
-        assert!(rbufr1.peek().is_none());
+        assert!(rbufr1.reader_front().is_none());
 
         for _ in 0..N {
-            assert!(rbufr1.stage().is_some());
+            assert!(rbufr1.writer_front().is_some());
             assert!(rbufr1.commit().is_ok());
         }
         // should fail
-        assert!(rbufr1.stage().is_none());
+        assert!(rbufr1.writer_front().is_none());
         assert!(rbufr1.commit().is_err());
 
         //println!("wr {} rd {}, len {}",
@@ -308,7 +308,7 @@ mod tests {
 
         // alloc half
         for _ in 0..N / 2 {
-            assert!(rbufr1.stage().is_some());
+            assert!(rbufr1.writer_front().is_some());
             assert!(rbufr1.commit().is_ok());
         }
     }
@@ -359,7 +359,7 @@ mod tests {
     fn static_instance_example() {
         let intf: &'static Interface = &SHARED_INTF[0];
 
-        let alloc_res = intf.cmd_q.stage();
+        let alloc_res = intf.cmd_q.writer_front();
 
         if let Some(cmd) = alloc_res {
             cmd.id = 42;
@@ -367,7 +367,7 @@ mod tests {
             assert!(intf.cmd_q.commit().is_ok());
         }
 
-        let cmd = intf.cmd_q.peek();
+        let cmd = intf.cmd_q.reader_front();
 
         assert!(cmd.is_some());
         assert!(cmd.unwrap().id == 42);

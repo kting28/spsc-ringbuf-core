@@ -65,7 +65,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Producer<'a, T, Q,
     // Internal - get an item from the pool
     fn take_pool_item(&mut self) -> PoolIndex<N> {
         // Check the return queue
-        if let Some(item) = self.return_cons.peek() {
+        if let Some(item) = self.return_cons.reader_front() {
             // If there's a return item it must be a valid
             // pool index
             let payload_idx = usize::try_from(item.get_pool_idx()).unwrap();
@@ -84,7 +84,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Producer<'a, T, Q,
 
     // Stage item for write without payload
     pub fn stage(&mut self) -> Option<&mut Q> {
-        if let Some(item) = self.alloc_prod.stage() {
+        if let Some(item) = self.alloc_prod.writer_front() {
             item.set_pool_idx(PoolIndex::<N>(N as u32));
 
             Some(item)
@@ -99,7 +99,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Producer<'a, T, Q,
         if let Ok(idx) = usize::try_from(self.take_pool_item()) {
             let payload = &self.pool_ref[idx];
 
-            if let Some(item) = self.alloc_prod.stage() {
+            if let Some(item) = self.alloc_prod.writer_front() {
                 item.set_pool_idx(PoolIndex::<N>(idx as u32));
 
                 Ok((item, payload))
@@ -115,7 +115,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Producer<'a, T, Q,
     // if the payload has already been passed to the consumer.
     pub fn commit(&mut self) -> Result<(), SharedPoolError> {
         // In payload has been allocated, check if passed to consumer.
-        if let Some(item) = self.alloc_prod.stage() {
+        if let Some(item) = self.alloc_prod.writer_front() {
             if let Ok(idx) = usize::try_from(item.get_pool_idx()) {
                 if self.pool_ref[idx].try_read().is_none() {
                     // Payload index is set but not passed to consumer
@@ -142,7 +142,7 @@ pub struct Consumer<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> {
 
 impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Consumer<'a, T, Q, N, M> {
     pub fn peek(&self) -> (Option<&Q>, Option<&SharedSingleton<T>>) {
-        let ret = self.alloc_cons.peek();
+        let ret = self.alloc_cons.reader_front();
 
         match ret {
             Some(message) => {
@@ -165,9 +165,9 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Consumer<'a, T, Q,
     }
 
     // Return a payload location in the pool back to the Producer
-    pub fn enqueue_return(&mut self, pidx: PoolIndex<N>) -> Result<(), SharedPoolError> {
+    pub fn return_payload(&mut self, pidx: PoolIndex<N>) -> Result<(), SharedPoolError> {
         // Allocation a location in the return queue
-        if let Some(re) = self.return_prod.stage() {
+        if let Some(re) = self.return_prod.writer_front() {
             // Assert returned payload idx is at least valid
             // That's the best we can do from consumer side
             assert!(pidx.is_valid());
@@ -247,7 +247,7 @@ impl<T, Q: HasPoolIdx<N>, const N: usize, const M: usize> SharedPool<T, Q, N, M>
             // Pre-fill the return queue with all the pool indices
             for i in 0..N {
                 // Can unwrap here as we don't expect this fail
-                let item = ret_p.stage().unwrap();
+                let item = ret_p.writer_front().unwrap();
                 item.set_pool_idx(PoolIndex(i as u32));
                 ret_p.commit().unwrap();
             }
@@ -330,7 +330,7 @@ mod tests {
             assert!(payload.unwrap().read_done().is_ok());
 
             // Return the payload location back to the queue
-            assert!(consumer.enqueue_return(recvd.unwrap().get_pool_idx()).is_ok());
+            assert!(consumer.return_payload(recvd.unwrap().get_pool_idx()).is_ok());
 
         } else {
             panic!("first split failed!");

@@ -11,8 +11,8 @@ pub struct Producer <'a,T, const N: usize> {
 impl<'a, T, const N: usize> Producer<'a, T, N> {
 
     #[inline(always)]
-    pub fn stage(&mut self) -> Option<&mut T> { 
-        self.inner.stage()
+    pub fn writer_front(&mut self) -> Option<&mut T> { 
+        self.inner.writer_front()
     }
 
 
@@ -31,15 +31,15 @@ pub struct Consumer <'a,T, const N: usize> {
 impl<'a, T, const N: usize> Consumer<'a, T, N> {
 
     #[inline(always)]
-    pub fn peek(&self) -> Option<&T> {
-        self.inner.peek()
+    pub fn reader_front(&self) -> Option<&T> {
+        self.inner.reader_front()
 
     }
     
     #[inline(always)]
-    pub fn peek_mut(&mut self) -> Option<&mut T> {
+    pub fn reader_front_mut(&mut self) -> Option<&mut T> {
 
-        self.inner.peek_mut()
+        self.inner.reader_front_mut()
 
     }
 
@@ -127,7 +127,7 @@ mod tests {
         // as stage, commit and pop
         if let Ok((mut producer, mut consumer)) = ringbuf.split() {
             
-            let loc = producer.stage();
+            let loc = producer.writer_front();
 
             if let Some(v) = loc {
                 *v = 42;
@@ -135,9 +135,9 @@ mod tests {
                 assert!(producer.commit().is_ok());
             }
 
-            assert!(consumer.peek().is_some());
+            assert!(consumer.reader_front().is_some());
 
-            assert!(*consumer.peek().unwrap() == 42);
+            assert!(*consumer.reader_front().unwrap() == 42);
 
             assert!(consumer.pop().is_ok());
 
