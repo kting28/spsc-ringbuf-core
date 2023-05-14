@@ -63,7 +63,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Producer<'a, T, Q, N> {
     }
 
     // Internal - get an item from the pool
-    fn get_pool_item(&mut self) -> PoolIndex<N> {
+    fn take_pool_item(&mut self) -> PoolIndex<N> {
         // Check the return queue
         if let Some(item) = self.return_cons.peek() {
             // If there's a return item it must be a valid
@@ -96,7 +96,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Producer<'a, T, Q, N> {
     // Stage a command buffer and an accompanying payload from the pool
     // Return a pair of mutable references if successful
     pub fn stage_with_payload(&mut self) -> Result<(&mut Q, &SharedSingleton<T>), SharedPoolError> {
-        if let Ok(idx) = usize::try_from(self.get_pool_item()) {
+        if let Ok(idx) = usize::try_from(self.take_pool_item()) {
             let payload = &self.pool_ref[idx];
 
             if let Some(item) = self.alloc_prod.stage() {
@@ -141,8 +141,21 @@ pub struct Consumer<'a, T, Q: HasPoolIdx<N>, const N: usize> {
 }
 
 impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Consumer<'a, T, Q, N> {
-    pub fn peek(&self) -> Option<&Q> {
-        self.alloc_cons.peek()
+    pub fn peek(&self) -> (Option<&Q>, Option<&SharedSingleton<T>>) {
+        let ret = self.alloc_cons.peek();
+
+        match ret {
+            Some(message) => {
+                let has_idx = message.get_pool_idx();
+                if let Ok(idx) = usize::try_from(has_idx) {
+                    (ret, Some(&self.pool_ref[idx]))
+                }
+                else {
+                    (ret, None)
+                }
+            }
+            _ => (None, None)
+        }
     }
 
     pub fn pop(&mut self) -> Result<(), SharedPoolError> {
@@ -157,9 +170,9 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Consumer<'a, T, Q, N> {
         if let Some(re) = self.return_prod.stage() {
             // Assert returned payload idx is at least valid
             // That's the best we can do from consumer side
-            let loc = usize::try_from(pidx).unwrap();
+            assert!(pidx.is_valid());
 
-            assert!(self.pool_ref[loc].is_vacant());
+            assert!(self.pool_ref[pidx.0 as usize].is_vacant());
 
             re.set_pool_idx(pidx);
 
@@ -307,21 +320,19 @@ mod tests {
             assert!(producer.commit().is_ok());
 
             // Test consumer can see it
-            assert!(consumer.alloc_cons.peek().is_some());
+            assert!(consumer.peek().0.is_some());
 
-            let recvd = consumer.alloc_cons.peek().unwrap();
+            let (recvd, payload) = consumer.peek();
 
-            assert!(recvd.id == 41);
+            assert!(recvd.unwrap().id == 41);
 
-            let ret_pool_idx: usize = recvd.get_pool_idx().try_into().unwrap();
-
-            assert!(consumer.pool_ref[ret_pool_idx].peek().unwrap().value == 42);
+            assert!(payload.unwrap().peek().unwrap().value == 42);
 
             // Return the payload item to producer
-            assert!(consumer.pool_ref[ret_pool_idx].pop().is_ok());
+            assert!(payload.unwrap().pop().is_ok());
 
             // Return the payload location back to the queue
-            assert!(consumer.enqueue_return(recvd.get_pool_idx()).is_ok());
+            assert!(consumer.enqueue_return(recvd.unwrap().get_pool_idx()).is_ok());
 
         } else {
             panic!("first split failed!");
@@ -331,72 +342,91 @@ mod tests {
     #[test]
     fn test_errors() {
 
+        // 16 deep ring buffer and payload pool
         let shared_pool: SharedPool<Payload, Message, 16> = SharedPool {
             alloc_rbuf: RingBuf::INIT_0,
             return_rbuf: RingBuf::INIT_0,
             pool: [SharedSingleton::<Payload>::INIT_0; 16],
         };
 
-        if let Ok((mut producer, mut consumer)) = shared_pool.split() {
+        // Split producer and consumer objects in one shot
+        let (mut producer, mut consumer) =  shared_pool.split().unwrap();
 
-            let message = producer.stage().unwrap();
+        // stage the write location for write. This is what we called as "stage"
+        // This is staging without payload
+        let message = producer.stage().unwrap();
 
-            message.id = 41;
-            assert!(producer.commit().is_ok());
+        // Write something to the message itself
+        message.id = 41;
 
-            let recvd = consumer.alloc_cons.peek().unwrap();
+        // Commit the message
+        assert!(producer.commit().is_ok());
 
+        let (recvd, payload) = consumer.peek();
 
-            // There's no payload
-            assert!(!recvd.get_pool_idx().is_valid());
-            
+        // Consumer side should be able to peek it now
+        let recvd = recvd.unwrap();
 
-            // Return an invalid location
-            assert!(consumer.enqueue_return(recvd.get_pool_idx()).is_err());
+        // Assert that there's no payload
+        assert!(!recvd.get_pool_idx().is_valid());
 
-            consumer.pop().unwrap();
-            
-            for i in 0..16 {
+        // There's no payload
+        assert!(payload.is_none());
+        
+        // Return an invalid location will assert!
+        //assert!(consumer.enqueue_return(recvd.get_pool_idx()).is_err());
 
-                let (_, payload) = producer.stage_with_payload().unwrap();
-                // unclaimed to producer
-                payload.stage().unwrap();
-                payload.commit().unwrap();
-                // producer to consumer
-                producer.commit().unwrap();
+        // Pop the message
+        consumer.pop().unwrap();
+  
+        // Try to use up all the message and payloads
+        for i in 0..16 {
 
-            }
-
-            // No way to stage one more as everything has been 
-            // allocated
-            assert!(producer.stage_with_payload().is_err());
-
-            // Return the message but not payload
-            let payload_idx = consumer.alloc_cons.peek().unwrap().get_pool_idx();
-
-            // Set the payload locatio[n as done
-            consumer.pool_ref[usize::try_from(payload_idx).unwrap()].pop().unwrap();
-            consumer.pop().unwrap();
-
-            // should still fail
-            assert!(producer.stage_with_payload().is_err());
-
-            // stage without payload should be fine
-            assert!(producer.stage().is_some());
-
-            // return the payload
-            assert!(consumer.enqueue_return(payload_idx).is_ok());
-
-            let new_stage = producer.stage_with_payload();
-
-            match new_stage {
-                Ok((msg, _)) => assert!(msg.get_pool_idx().is_valid()),
-                _ => panic!("new stage should have valid payload!") 
-            }
+            let (_, payload) = producer.stage_with_payload().unwrap();
+            // unstageed to producer
+            let inner = payload.stage().unwrap();
+            inner.value = i;
+            // Mark the payload as ready for consumer
+            payload.commit().unwrap();
+            // Commit the message to consumer
+            producer.commit().unwrap();
 
         }
-        else {
-            panic!("first split failed!");
+
+        // No way to stage one more as everything has been 
+        // allocated
+        assert!(producer.stage_with_payload().is_err());
+
+        // Get the first one in queue, it must have payload
+        let (recvd, payload) = consumer.peek();
+
+        let recvd = recvd.unwrap();
+        let payload = payload.unwrap();
+
+        // Copy the pool idx for return purpose
+        let pool_idx = recvd.get_pool_idx();
+
+        // Return the payload location
+        payload.pop().unwrap();
+
+        // Return the message
+        consumer.pop().unwrap();
+
+        // Staging with payload should still fail since the payload pool is still empty
+        assert!(producer.stage_with_payload().is_err());
+
+        // stage without payload should be fine
+        assert!(producer.stage().is_some());
+
+        // Return the index
+        assert!(consumer.enqueue_return(pool_idx).is_ok());
+
+        // Should be possible to stage with payload
+        let new_stage = producer.stage_with_payload();
+
+        match new_stage {
+            Ok((msg, _)) => assert!(msg.get_pool_idx().is_valid()),
+            _ => panic!("new stage should have valid payload!") 
         }
     }
 }

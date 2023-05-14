@@ -51,7 +51,6 @@ impl <T> SharedSingleton<T> {
     }
 
     /// Returns mutable reference of T if singleton is owned by the producer
-    /// NOTE: does not check for multiple mutable calls!
     #[inline]
     pub fn stage(&self) -> Option<&mut T> {
         if self.owner.get() == Owner::Unclaimed {
