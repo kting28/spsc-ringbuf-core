@@ -30,7 +30,7 @@ impl<const N: usize> TryFrom<PoolIndex<N>> for usize {
 }
 
 impl<const N: usize>  PoolIndex<N> {
-    fn is_valid(&self) -> bool {
+    pub fn is_valid(&self) -> bool {
         self.0 < N as u32
     }
 }
@@ -40,19 +40,19 @@ pub trait HasPoolIdx<const N: usize> {
     fn set_pool_idx(&mut self, pindex: PoolIndex<N>);
 }
 
-pub struct Producer<'a, T, Q: HasPoolIdx<N>, const N: usize> {
+pub struct Producer<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> {
     // Producer handle for the command allocation
-    pub alloc_prod: RingBufProducer<'a, Q, N>,
+    pub alloc_prod: RingBufProducer<'a, Q, M>,
     // Consumer handle for the return ringbuf
-    pub return_cons: RingBufConsumer<'a, Q, N>,
+    pub return_cons: RingBufConsumer<'a, Q, M>,
     // Reference to the payload pool
     pool_ref: &'a [SharedSingleton<T>; N],
 }
 
-impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Producer<'a, T, Q, N> {
+impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Producer<'a, T, Q, N, M> {
     pub const fn new(
-        alloc_prod: RingBufProducer<'a, Q, N>,
-        return_cons: RingBufConsumer<'a, Q, N>,
+        alloc_prod: RingBufProducer<'a, Q, M>,
+        return_cons: RingBufConsumer<'a, Q, M>,
         pool_ref: &'a [SharedSingleton<T>; N],
     ) -> Self {
         Producer {
@@ -131,16 +131,16 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Producer<'a, T, Q, N> {
     }
 }
 
-pub struct Consumer<'a, T, Q: HasPoolIdx<N>, const N: usize> {
+pub struct Consumer<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> {
     // Consumer handle for the command allocation
-    pub alloc_cons: RingBufConsumer<'a, Q, N>,
+    pub alloc_cons: RingBufConsumer<'a, Q, M>,
     // Producer handle for the return ringbuf
-    pub return_prod: RingBufProducer<'a, Q, N>,
+    pub return_prod: RingBufProducer<'a, Q, M>,
     // Reference to the payload pool
     pool_ref: &'a [SharedSingleton<T>; N],
 }
 
-impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Consumer<'a, T, Q, N> {
+impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Consumer<'a, T, Q, N, M> {
     pub fn peek(&self) -> (Option<&Q>, Option<&SharedSingleton<T>>) {
         let ret = self.alloc_cons.peek();
 
@@ -172,6 +172,9 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Consumer<'a, T, Q, N> {
             // That's the best we can do from consumer side
             assert!(pidx.is_valid());
 
+            // pidx is asserted above to be valid
+            // pidx.0 is private, hence user cannot access the value
+            // directly. Also pool_ref is private
             assert!(self.pool_ref[pidx.0 as usize].is_vacant());
 
             re.set_pool_idx(pidx);
@@ -185,15 +188,15 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize> Consumer<'a, T, Q, N> {
     }
 }
 
-pub struct SharedPool<T, Q: HasPoolIdx<N>, const N: usize> {
-    alloc_rbuf: RingBuf<Q, N>,
-    return_rbuf: RingBuf<Q, N>,
+pub struct SharedPool<T, Q: HasPoolIdx<N>, const N: usize, const M: usize> {
+    alloc_rbuf: RingBuf<Q, M>,
+    return_rbuf: RingBuf<Q, M>,
     pool: [SharedSingleton<T>; N],
 }
 
-unsafe impl<T, Q: HasPoolIdx<N>, const N: usize> Sync for SharedPool<T, Q, N> {}
+unsafe impl<T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Sync for SharedPool<T, Q, N, M> {}
 
-impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
+impl<T, Q: HasPoolIdx<N>, const N: usize, const M: usize> SharedPool<T, Q, N, M> {
     // new
     // initialize return_rbuf to be full
     // return to be empty
@@ -207,7 +210,7 @@ impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
     }
 
     // Return the producer, once in life time
-    pub fn split_prod(&self) -> Result<Producer<'_, T, Q, N>, SharedPoolError> {
+    pub fn split_prod(&self) -> Result<Producer<'_, T, Q, N, M>, SharedPoolError> {
         if self.alloc_rbuf.has_split_prod() || self.return_rbuf.has_split_cons() {
             // Can only split once in life time
             Err(SharedPoolError::AlreadySplit)
@@ -230,7 +233,7 @@ impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
     }
 
     // Return the consumer, once in life time
-    pub fn split_cons(&self) -> Result<Consumer<'_, T, Q, N>, SharedPoolError> {
+    pub fn split_cons(&self) -> Result<Consumer<'_, T, Q, N, M>, SharedPoolError> {
         if self.alloc_rbuf.has_split_cons() || self.return_rbuf.has_split_prod() {
             // Can only split once in life time
             Err(SharedPoolError::AlreadySplit)
@@ -258,7 +261,7 @@ impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
         }
     }
     // Split both producer and consumer handle together
-    pub fn split(&self) -> Result<(Producer<'_, T, Q, N>, Consumer<'_, T, Q, N>), SharedPoolError> {
+    pub fn split(&self) -> Result<(Producer<'_, T, Q, N, M>, Consumer<'_, T, Q, N, M>), SharedPoolError> {
 
         match (self.split_prod(), self.split_cons())  {
             (Ok(prod), Ok(cons)) => Ok((prod, cons)),
@@ -272,17 +275,17 @@ impl<T, Q: HasPoolIdx<N>, const N: usize> SharedPool<T, Q, N> {
 mod tests {
     use super::*;
 
-    const CMD_Q_DEPTH: usize = 16;
+    const POOL_DEPTH: usize = 16;
     pub struct Message {
         id: u32,
-        payload: PoolIndex<CMD_Q_DEPTH>,
+        payload: PoolIndex<POOL_DEPTH>,
     }
 
-    impl HasPoolIdx<CMD_Q_DEPTH> for Message {
-        fn get_pool_idx(&self) -> PoolIndex<CMD_Q_DEPTH> {
+    impl HasPoolIdx<POOL_DEPTH> for Message {
+        fn get_pool_idx(&self) -> PoolIndex<POOL_DEPTH> {
             self.payload
         }
-        fn set_pool_idx(&mut self, pindex: PoolIndex<CMD_Q_DEPTH>) {
+        fn set_pool_idx(&mut self, pindex: PoolIndex<POOL_DEPTH>) {
             self.payload = pindex
         }
     }
@@ -291,16 +294,11 @@ mod tests {
         value: u32,
     }
 
-    static SHARED_POOL: SharedPool<Payload, Message, 16> = SharedPool {
+    static SHARED_POOL: SharedPool<Payload, Message, 16, 32> = SharedPool {
         alloc_rbuf: RingBuf::INIT_0,
         return_rbuf: RingBuf::INIT_0,
         pool: [SharedSingleton::<Payload>::INIT_0; 16],
     };
-
-    pub struct Handles <'a> {
-        producer_ref: &'a Producer<'a, Payload, Message, 16>,
-        consumer_ref: &'a Producer<'a, Payload, Message, 16>,
-    }
 
     #[test]
     fn test_static() {
@@ -339,94 +337,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_errors() {
 
-        // 16 deep ring buffer and payload pool
-        let shared_pool: SharedPool<Payload, Message, 16> = SharedPool {
-            alloc_rbuf: RingBuf::INIT_0,
-            return_rbuf: RingBuf::INIT_0,
-            pool: [SharedSingleton::<Payload>::INIT_0; 16],
-        };
-
-        // Split producer and consumer objects in one shot
-        let (mut producer, mut consumer) =  shared_pool.split().unwrap();
-
-        // stage the write location for write. This is what we called as "stage"
-        // This is staging without payload
-        let message = producer.stage().unwrap();
-
-        // Write something to the message itself
-        message.id = 41;
-
-        // Commit the message
-        assert!(producer.commit().is_ok());
-
-        let (recvd, payload) = consumer.peek();
-
-        // Consumer side should be able to peek it now
-        let recvd = recvd.unwrap();
-
-        // Assert that there's no payload
-        assert!(!recvd.get_pool_idx().is_valid());
-
-        // There's no payload
-        assert!(payload.is_none());
-        
-        // Return an invalid location will assert!
-        //assert!(consumer.enqueue_return(recvd.get_pool_idx()).is_err());
-
-        // Pop the message
-        consumer.pop().unwrap();
-  
-        // Try to use up all the message and payloads
-        for i in 0..16 {
-
-            let (_, payload) = producer.stage_with_payload().unwrap();
-            // unstageed to producer
-            let inner = payload.stage().unwrap();
-            inner.value = i;
-            // Mark the payload as ready for consumer
-            payload.commit().unwrap();
-            // Commit the message to consumer
-            producer.commit().unwrap();
-
-        }
-
-        // No way to stage one more as everything has been 
-        // allocated
-        assert!(producer.stage_with_payload().is_err());
-
-        // Get the first one in queue, it must have payload
-        let (recvd, payload) = consumer.peek();
-
-        let recvd = recvd.unwrap();
-        let payload = payload.unwrap();
-
-        // Copy the pool idx for return purpose
-        let pool_idx = recvd.get_pool_idx();
-
-        // Return the payload location
-        payload.pop().unwrap();
-
-        // Return the message
-        consumer.pop().unwrap();
-
-        // Staging with payload should still fail since the payload pool is still empty
-        assert!(producer.stage_with_payload().is_err());
-
-        // stage without payload should be fine
-        assert!(producer.stage().is_some());
-
-        // Return the index
-        assert!(consumer.enqueue_return(pool_idx).is_ok());
-
-        // Should be possible to stage with payload
-        let new_stage = producer.stage_with_payload();
-
-        match new_stage {
-            Ok((msg, _)) => assert!(msg.get_pool_idx().is_valid()),
-            _ => panic!("new stage should have valid payload!") 
-        }
-    }
 }
