@@ -64,10 +64,10 @@ fn test_errors() {
 
         let (_, payload) = producer.stage_with_payload().unwrap();
         // unstageed to producer
-        let inner = payload.stage().unwrap();
+        let inner = payload.try_write().unwrap();
         inner.value = i;
         // Mark the payload as ready for consumer
-        payload.commit().unwrap();
+        payload.write_done().unwrap();
         // Commit the message to consumer
         producer.commit().unwrap();
 
@@ -87,7 +87,7 @@ fn test_errors() {
     let pool_idx = recvd.get_pool_idx();
 
     // Return the payload location
-    payload.pop().unwrap();
+    payload.read_done().unwrap();
 
     // Return the message
     consumer.pop().unwrap();

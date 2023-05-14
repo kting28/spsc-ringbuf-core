@@ -117,7 +117,7 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Producer<'a, T, Q,
         // In payload has been allocated, check if passed to consumer.
         if let Some(item) = self.alloc_prod.stage() {
             if let Ok(idx) = usize::try_from(item.get_pool_idx()) {
-                if self.pool_ref[idx].peek().is_none() {
+                if self.pool_ref[idx].try_read().is_none() {
                     // Payload index is set but not passed to consumer
                     return Err(SharedPoolError::PayloadNotConsumerOwned);
                 }
@@ -309,10 +309,10 @@ mod tests {
             
             // Update the message
             message.id = 41;
-            let raw = payload.stage().unwrap();
+            let raw = payload.try_write().unwrap();
             raw.value = 42;
             // Pass the payload
-            payload.commit().unwrap();
+            payload.write_done().unwrap();
 
             // Commit 
             assert!(producer.commit().is_ok());
@@ -324,10 +324,10 @@ mod tests {
 
             assert!(recvd.unwrap().id == 41);
 
-            assert!(payload.unwrap().peek().unwrap().value == 42);
+            assert!(payload.unwrap().try_read().unwrap().value == 42);
 
             // Return the payload item to producer
-            assert!(payload.unwrap().pop().is_ok());
+            assert!(payload.unwrap().read_done().is_ok());
 
             // Return the payload location back to the queue
             assert!(consumer.enqueue_return(recvd.unwrap().get_pool_idx()).is_ok());

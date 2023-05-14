@@ -11,7 +11,7 @@ pub enum ErrCode {
 
 #[derive(Copy, Clone, PartialEq)]
 enum Owner {
-    Unclaimed, // can be claimed for write
+    Vacant, // can be claimed for write
     Producer,  // claimed state
     Consumer,  // write done, passed to consumer
 }
@@ -42,18 +42,18 @@ impl <T> SharedSingleton<T> {
 
     #[inline]
     pub const fn new() -> Self {
-        SharedSingleton { owner: Cell::new(Owner::Unclaimed), ucell: Self::INIT_U  }
+        SharedSingleton { owner: Cell::new(Owner::Vacant), ucell: Self::INIT_U  }
     }
 
     #[inline]
     pub fn is_vacant(&self) -> bool {
-        self.owner.get() == Owner::Unclaimed
+        self.owner.get() == Owner::Vacant
     }
 
-    /// Returns mutable reference of T if singleton is owned by the producer
+    /// Returns mutable reference of T if singleton is vacant
     #[inline]
-    pub fn stage(&self) -> Option<&mut T> {
-        if self.owner.get() == Owner::Unclaimed {
+    pub fn try_write(&self) -> Option<&mut T> {
+        if self.owner.get() == Owner::Vacant {
             let x: *mut MaybeUninit<T> = self.ucell.get();
             let t: &mut T = unsafe {  &mut *(x as *mut T)};
             self.owner.set(Owner::Producer);
@@ -66,7 +66,7 @@ impl <T> SharedSingleton<T> {
 
     /// Pass ownership to Consumer from Producer
     #[inline]
-    pub fn commit(&self) -> Result<(),ErrCode> {
+    pub fn write_done(&self) -> Result<(),ErrCode> {
         if self.owner.get() == Owner::Producer {
             self.owner.set(Owner::Consumer);
             Ok(())
@@ -80,7 +80,7 @@ impl <T> SharedSingleton<T> {
     /// otherwise None
     /// NOTE: does not check for multiple calls
     #[inline]
-    pub fn peek(&self) -> Option<&T> {
+    pub fn try_read(&self) -> Option<&T> {
         if self.owner.get() == Owner::Consumer {
             let x: *mut MaybeUninit<T> = self.ucell.get();
             let t: & T = unsafe {  & *(x as * const T)};
@@ -93,9 +93,9 @@ impl <T> SharedSingleton<T> {
 
     /// Release location back to Producer
     #[inline]
-    pub fn pop(&self) -> Result<(),ErrCode> {
+    pub fn read_done(&self) -> Result<(),ErrCode> {
         if self.owner.get() == Owner::Consumer {
-            self.owner.set(Owner::Unclaimed);
+            self.owner.set(Owner::Vacant);
             Ok(())
         }
         else {
@@ -118,23 +118,23 @@ mod tests {
 
         let shared = SharedSingleton::<SomeStruct>::new();
 
-        if let Some(payload) = shared.stage() {
+        if let Some(payload) = shared.try_write() {
 
             // Can only allocate once before commit
-            assert!(shared.stage().is_none());
+            assert!(shared.try_write().is_none());
 
             payload.id = 42;
-            assert!(shared.commit().is_ok());
+            assert!(shared.write_done().is_ok());
         }
 
         // once passed to consumer, can't get mut_ref
-        assert!(shared.stage().is_none());
+        assert!(shared.try_write().is_none());
 
-        assert!(shared.peek().is_some());
+        assert!(shared.try_read().is_some());
 
-        assert!(shared.peek().unwrap().id == 42);
+        assert!(shared.try_read().unwrap().id == 42);
 
-        assert!(shared.pop().is_ok());
+        assert!(shared.read_done().is_ok());
 
     }
 
