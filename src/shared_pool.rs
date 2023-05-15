@@ -141,7 +141,7 @@ pub struct Consumer<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> {
 }
 
 impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Consumer<'a, T, Q, N, M> {
-    pub fn peek(&self) -> (Option<&Q>, Option<&SharedSingleton<T>>) {
+    pub fn peek_with_payload(&self) -> (Option<&Q>, Option<&SharedSingleton<T>>) {
         let ret = self.alloc_cons.reader_front();
 
         match ret {
@@ -155,6 +155,19 @@ impl<'a, T, Q: HasPoolIdx<N>, const N: usize, const M: usize> Consumer<'a, T, Q,
                 }
             }
             _ => (None, None)
+        }
+    }
+
+    pub fn peek(&self) -> Option<&Q> {
+        self.alloc_cons.reader_front()
+    }
+
+    pub fn read_pool_item(&self, pidx: PoolIndex<N>) -> Option<&SharedSingleton<T>> {
+        if let Ok(idx) = usize::try_from(pidx) {
+            Some(&self.pool_ref[idx])
+        }
+        else {
+            None
         }
     }
 
@@ -301,7 +314,7 @@ mod tests {
     };
 
     #[test]
-    fn test_static() {
+    fn test_basic() {
         if let Ok((mut producer, mut consumer)) = SHARED_POOL.split() {
 
             // Allocate the actual command
@@ -318,9 +331,9 @@ mod tests {
             assert!(producer.commit().is_ok());
 
             // Test consumer can see it
-            assert!(consumer.peek().0.is_some());
+            assert!(consumer.peek_with_payload().0.is_some());
 
-            let (recvd, payload) = consumer.peek();
+            let (recvd, payload) = consumer.peek_with_payload();
 
             assert!(recvd.unwrap().id == 41);
 
@@ -331,6 +344,39 @@ mod tests {
 
             // Return the payload location back to the queue
             assert!(consumer.return_payload(recvd.unwrap().get_pool_idx()).is_ok());
+
+            assert!(consumer.pop().is_ok());
+            
+            let (message, payload) = producer.stage_with_payload().unwrap();
+
+            // Update the message
+            message.id = 43;
+            let raw = payload.try_write().unwrap();
+            raw.value = 44;
+            // Pass the payload
+            payload.write_done().unwrap();
+
+            // Commit 
+            assert!(producer.commit().is_ok());
+
+            // Peek only so we can return the message while holding
+            // the payload
+            let recvd = consumer.peek().unwrap();
+
+            let payload_idx = recvd.get_pool_idx();
+
+            // Return the message 
+            assert!(consumer.pop().is_ok());
+
+            // Keep payload access
+            let payload = consumer.read_pool_item(payload_idx).unwrap();
+
+            assert!(payload.try_read().unwrap().value == 44);
+
+            assert!(payload.read_done().is_ok());
+
+            assert!(consumer.return_payload(payload_idx).is_ok());
+
 
         } else {
             panic!("first split failed!");
