@@ -29,3 +29,45 @@ The top level `RingBuf` structure provides the final protection of unintended di
 # Shared Singleton
 
 This crate also provides a separate cheaper implementation for the special case of single item queue. In this version an "owner" flag replaces all read andwrite indices manipulation overhead. This structure can also be used in conjunction with the ring buffer to act as queue item extension. For example one can imagine a command queue with deeper depth than available command payloads since not all commands require a payload. In this case the payload can be allocated from a pool of such shared singletons with pool index passed by command in the queue. The owner flag provides separate owner tracking on each item in the payload pool.
+
+# Shared pool
+All of the tools combined is used to implement a "message with separate payload pool" communications system.
+
+```
+                        Pool of SharedSingleton<T>
+                        ┌─┬─┬─┬─┐   ┌───┐
+                        │0│1│2│3│ ..│N-1│
+                        └─┴─┴─┴┬┘   └───┘
+┌────────────────┐             │PoolIndex<N>       ┌────────────────┐
+│Producer        │         ┌───┘                   │Consumer        │
+│ ┌───────────┐  │         │                       │ ┌───────────┐  │
+│ │alloc_prod ├──┼───┐  ┌─┬┴┬─┬─┬─┐   ┌───┐     ┌──► │alloc_cons │  │
+│ └───────────┘  │   └─►│0│1│2│3│4│.. │M-1├─────┘  │ └───────────┘  │
+│  RingbufProducer      └─┴─┴─┴─┴─┘   └───┘        │                │
+│ ┌───────────┐  │   Prod. -> Cons Ringbuf<Q,M>    │ ┌───────────┐  │
+│ │return_cons│◄─┼──┐                            ┌─┼─┤return_prod│  │
+│ └───────────┘  │  │   ┌─┬─┬─┬─┬─┐   ┌───┐      │ │ └───────────┘  │
+│  RingbufConsumer  └───┤0│1│2│3│4│.. │M-1│◄─────┘ │                │
+└─────────────────      └─┴─┴─┴─┴─┘   └───┘        └────────────────┘
+                    Cons. -> Prod. Ringbuf<Q,M>
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
