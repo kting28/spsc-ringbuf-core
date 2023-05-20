@@ -214,7 +214,11 @@ impl<T, Q: HasPoolIdx<N>, const N: usize, const M: usize> SharedPool<T, Q, N, M>
     // initialize return_rbuf to be full
     // return to be empty
 
+    const OK: () = assert!(M >= N, "Ringbuf capacity (M) must be >= Pool Capacity (N)");
+    
+    #[allow(clippy::let_unit_value)]
     pub const fn new() -> Self {
+        let _: () = SharedPool::<T, Q, N, M>::OK;
         SharedPool {
             alloc_rbuf: RingBuf::new(),
             return_rbuf: RingBuf::new(),
@@ -282,6 +286,9 @@ impl<T, Q: HasPoolIdx<N>, const N: usize, const M: usize> SharedPool<T, Q, N, M>
         }
     }
 
+    pub fn num_free(&self) -> u32 {
+        self.return_rbuf.len()
+    }
 }
 
 #[cfg(test)]

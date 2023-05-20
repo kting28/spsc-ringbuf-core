@@ -18,14 +18,12 @@ pub struct Payload {
     value: u32,
 }
 
-// Declare a static version
-static SHARED_POOL: SharedPool<Payload, Message, 16, 32> = SharedPool::new();
 
 #[test]
 fn test_errors() {
 
     // 32 deep ring buffer and 16-deep payload pool
-    let shared_pool: SharedPool<Payload, Message, 16, 32> = SharedPool::new();
+    let shared_pool: SharedPool<Payload, Message, POOL_DEPTH, 32> = SharedPool::new();
 
     // Split producer and consumer objects in one shot
     let (mut producer, mut consumer) =  shared_pool.split().unwrap();
@@ -116,6 +114,8 @@ fn test_errors() {
     }
 
 }
+// Declare a static version
+static SHARED_POOL: SharedPool<Payload, Message, POOL_DEPTH, 16> = SharedPool::new();
 
 #[test]
 fn test_threads() {
@@ -131,7 +131,7 @@ fn test_threads() {
     let c_handle = thread::spawn(move || {
 
         let mut exit = false;
-        let mut expected = 0;
+        let mut expected_value = 0;
         while !exit {
 
             if consumer.peek().is_some() {
@@ -145,11 +145,11 @@ fn test_threads() {
                 // Copy the pool idx for return purpose
                 let pool_idx = recvd.get_pool_idx();
                 
-                assert!(payload.try_read().unwrap().value == expected);
+                assert!(payload.try_read().unwrap().value == expected_value);
 
-                println!("consume {}", expected);
+                println!("consume {}", expected_value);
 
-                expected += 1;
+                expected_value += 1;
 
                 if payload.try_read().unwrap().value == total_transfer - 1 {
                     exit = true;
@@ -193,6 +193,8 @@ fn test_threads() {
             }
         }
     });
+
+    assert!(SHARED_POOL.num_free() == POOL_DEPTH as u32);
 
     p_handle.join().unwrap();
     c_handle.join().unwrap();

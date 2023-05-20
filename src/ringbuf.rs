@@ -112,6 +112,9 @@ impl<T, const N: usize> RingBuf<T, N> {
             _ => Err(())
         }
     }
+    pub fn len(&self) -> u32 {
+        self.ringbuf_ref.len()
+    }
 
 }
 
