@@ -126,7 +126,7 @@ fn test_threads() {
     // 32 deep ring buffer and 16-deep payload pool
     let (mut producer, mut consumer) =  SHARED_POOL.split().unwrap();
 
-    let total_transfer = 200;
+    let total_transfer = 277;
     
     let c_handle = thread::spawn(move || {
 
