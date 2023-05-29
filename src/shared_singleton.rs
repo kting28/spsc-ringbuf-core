@@ -28,7 +28,7 @@ enum Owner {
 pub struct SharedSingleton <T> {
     // TODO: enforce the owner field to entire word
     owner: Cell<Owner>,
-    pub ucell: UnsafeCell<MaybeUninit<T>>,
+    ucell: UnsafeCell<MaybeUninit<T>>,
 }
 
 // Delcare this is thread safe due to the owner protection
