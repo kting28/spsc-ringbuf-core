@@ -59,6 +59,10 @@ pub struct RingBuf<T, const N: usize> {
 
 }
 
+// Delcare this is thread safe due to the owner protection
+// sequence (Producer-> consumer , consumer -> owner)
+unsafe impl<T, const N: usize> Sync for RingBuf<T, N> {}
+
 impl<T, const N: usize> RingBuf<T, N> {
 
     pub const INIT_0: RingBuf<T, N> = Self::new();
