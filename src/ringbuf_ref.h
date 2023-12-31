@@ -134,7 +134,7 @@ struct RingBufRef {
         if (!is_full(buf)) {
             // buffer_ucell contains UnsafeCell<MaybeUninit<T>>
             // UnsafeCell's get is defined as "fn get(&self) -> *mut T"
-            return &buf->buffer_ucell[mask(&buf->wr_idx, buf->N)];
+            return &buf->buffer_ucell[mask(&buf->wr_idx, buf->N)*buf->item_sz_bytes];
         } else {
             return 0;
         }
